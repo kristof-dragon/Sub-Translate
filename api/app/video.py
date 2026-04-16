@@ -109,11 +109,22 @@ def browse(relative: str = "") -> dict:
 
     root = _media_root()
     entries: list[BrowseEntry] = []
-    for p in sorted(path.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
-        if p.name.startswith("."):
+    # Skip dotfiles BEFORE any stat() call — macOS AppleDouble sidecars like
+    # `._.DS_Store` can raise PermissionError from inside a container running
+    # as a non-root UID, and we don't want to surface them anyway.
+    visible = [p for p in path.iterdir() if not p.name.startswith(".")]
+    for p in sorted(visible, key=lambda x: x.name.lower()):
+        try:
+            is_dir = p.is_dir()
+            if is_dir:
+                is_video = False
+                size = None
+            else:
+                is_video = p.is_file() and p.suffix.lower() in VIDEO_EXTS
+                size = p.stat().st_size
+        except OSError:
+            # Broken symlink, perm-denied sidecar, ... — just hide it.
             continue
-        is_dir = p.is_dir()
-        is_video = p.is_file() and p.suffix.lower() in VIDEO_EXTS
         if not is_dir and not is_video:
             continue
         entries.append(
@@ -121,9 +132,11 @@ def browse(relative: str = "") -> dict:
                 name=p.name,
                 is_dir=is_dir,
                 is_video=is_video,
-                size=p.stat().st_size if p.is_file() else None,
+                size=size,
             )
         )
+    # Sort dirs before files; names within each group are already alphabetical.
+    entries.sort(key=lambda e: (not e.is_dir, e.name.lower()))
 
     rel_str = "" if path == root else str(path.relative_to(root))
     parent_str: str | None
