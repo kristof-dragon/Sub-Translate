@@ -126,10 +126,12 @@ async def _process_file(file_id: int) -> None:
             progress_cb=on_progress,
         )
 
-    # 3) Write output file.
-    TRANSLATED_DIR.mkdir(parents=True, exist_ok=True)
+    # 3) Write output file. Partition by project_id to keep per-project cleanup
+    #    simple and mirror the uploads layout at /data/uploads/<pid>/.
+    proj_out = TRANSLATED_DIR / str(f.project_id)
+    proj_out.mkdir(parents=True, exist_ok=True)
     stem = Path(f.original_filename).stem
-    out_path = TRANSLATED_DIR / f"{file_id}_{stem}.{target_lang}.{f.format}"
+    out_path = proj_out / f"{file_id}_{stem}.{target_lang}.{f.format}"
     out_path.write_text(writer(translated_cues), encoding="utf-8")
 
     _set_status(

@@ -9,9 +9,10 @@ Ollama LLM backend. No login, intended for internal LAN use only.
   description, a default target language, and an optional default model.
 - **Batch or single-file upload**. Files are queued; progress is shown per
   file (detecting → translating % → done).
-- **MKV subtitle extraction**. Browse a bind-mounted media folder, pick an
-  `.mkv`, tick the subtitle tracks you want translated. Bundled
-  `mkvtoolnix` CLI in the api container does the demux.
+- **Video subtitle extraction**. Browse a bind-mounted media folder, pick an
+  `.mkv` / `.mp4` / `.webm` / etc., tick the subtitle tracks to extract.
+  Bundled `ffmpeg` / `ffprobe` in the api container handle the demux.
+  Extracted tracks land in the project and can then be translated on demand.
 - **MKVToolNix GUI** (jlesage/mkvtoolnix) runs as a sidecar on port 5800 for
   interactive edits when the in-app picker isn't enough. Linked from the
   drawer's "Tools" section.
@@ -25,10 +26,11 @@ Ollama LLM backend. No login, intended for internal LAN use only.
 ## Layout
 
 ```
-api/    FastAPI + SQLite worker, mkvtoolnix CLI
+api/    FastAPI + SQLite worker, bundled ffmpeg/ffprobe
 web/    React (Vite) SPA served by nginx
 data/   Created at runtime — SQLite DB, uploads, translated output
-media/  Default bind-mount for MKV browsing (override via MEDIA_PATH in .env)
+        (partitioned per-project: data/uploads/<id>/ and data/translated/<id>/)
+media/  Default bind-mount for video browsing (override via MEDIA_PATH in .env)
 ```
 
 ## Running
@@ -47,19 +49,25 @@ First-run steps:
    and save again.
 3. **Projects** → create a project.
 4. Either drag `.srt`/`.vtt` files into the dropzone, **or** click
-   **Add from MKV…** to browse `/media`, pick an MKV, tick its subtitle
-   tracks, and extract them.
-5. Watch progress → download translated files.
+   **Add from video…** to browse `/media`, pick a video (MKV/MP4/WebM/…),
+   tick its subtitle tracks, and extract them into the project.
+5. Extracted rows appear with status `extracted`. Pick a target language at
+   the top of the project page, then click **Translate** on any row to
+   queue it for detect → translate → download.
 
-## Supported subtitle track formats inside MKVs
+## Supported subtitle stream formats
 
-| codec_id            | Format | Extract | Translate |
+ffprobe `codec_name` — handled across MKV, MP4, WebM, MOV, AVI, TS, …
+
+| codec_name          | Format | Extract | Translate |
 |---------------------|--------|---------|-----------|
-| `S_TEXT/UTF8`       | SRT    | ✓       | ✓         |
-| `S_TEXT/WEBVTT`     | VTT    | ✓       | ✓         |
-| `S_TEXT/ASS` / `SSA`| ASS    | shown   | not yet   |
-| `S_HDMV/PGS`        | PGS    | shown   | no (bitmap) |
-| `S_VOBSUB`          | VobSub | shown   | no (bitmap) |
+| `subrip`            | SRT    | ✓       | ✓         |
+| `webvtt`            | VTT    | ✓       | ✓         |
+| `mov_text`          | SRT    | ✓ (transmux) | ✓     |
+| `ass` / `ssa`       | ASS    | shown   | not yet   |
+| `hdmv_pgs_subtitle` | PGS    | shown   | no (bitmap) |
+| `dvd_subtitle`      | VobSub | shown   | no (bitmap) |
+| `dvb_subtitle`      | DVB    | shown   | no (bitmap) |
 
 ## Development
 

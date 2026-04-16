@@ -1,13 +1,68 @@
-import { useState } from 'react'
-import { NavLink, Route, Routes } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { NavLink, Route, Routes, useNavigate } from 'react-router-dom'
+import { api } from './api'
 import ProjectsList from './pages/ProjectsList'
 import ProjectDetail from './pages/ProjectDetail'
 import Settings from './pages/Settings'
+import type { OllamaHealth } from './types'
 
 // Host + port where jlesage/mkvtoolnix exposes its noVNC web GUI.
 // We assume it's on the same host as the app, default jlesage port 5800.
 // Override GUI_PORT in .env if you remapped it.
 const MKVTOOLNIX_PORT = 5800
+
+// How often to re-probe Ollama for the topbar status dot.
+const LLM_HEALTH_POLL_MS = 30_000
+
+function LlmStatus() {
+  const nav = useNavigate()
+  const [health, setHealth] = useState<OllamaHealth | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const tick = async () => {
+      try {
+        const h = await api.ollamaHealth()
+        if (!cancelled) setHealth(h)
+      } catch {
+        if (!cancelled) setHealth({ configured: true, ok: false, error: 'unreachable' })
+      }
+    }
+    tick()
+    const id = window.setInterval(tick, LLM_HEALTH_POLL_MS)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [])
+
+  // null = still loading first response → treat as unknown/yellow
+  let state: 'ok' | 'down' | 'unconfigured' = 'unconfigured'
+  if (health) {
+    if (!health.configured) state = 'unconfigured'
+    else if (health.ok) state = 'ok'
+    else state = 'down'
+  }
+
+  const titles: Record<typeof state, string> = {
+    ok: 'Ollama reachable — click to open Settings',
+    down: `Ollama unreachable${health?.error ? ` (${health.error})` : ''} — click to open Settings`,
+    unconfigured: 'Ollama not configured yet — click to open Settings',
+  }
+
+  return (
+    <button
+      type="button"
+      className="llm-status"
+      title={titles[state]}
+      aria-label={titles[state]}
+      onClick={() => nav('/settings')}
+    >
+      <span className="llm-status-label">LLM</span>
+      <span className={`llm-status-dot ${state}`} />
+    </button>
+  )
+}
 
 export default function App() {
   const [open, setOpen] = useState(true)
@@ -24,6 +79,7 @@ export default function App() {
           &#9776;
         </button>
         <h1>Subtitle Translator</h1>
+        <LlmStatus />
       </header>
 
       <div className="layout">

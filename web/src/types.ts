@@ -1,4 +1,10 @@
-export type FileStatus = 'queued' | 'detecting' | 'translating' | 'done' | 'error'
+export type FileStatus =
+  | 'extracted'
+  | 'queued'
+  | 'detecting'
+  | 'translating'
+  | 'done'
+  | 'error'
 
 export interface Project {
   id: number
@@ -54,7 +60,7 @@ export interface EventMessage {
 export interface BrowseEntry {
   name: string
   is_dir: boolean
-  is_mkv: boolean
+  is_video: boolean
   size: number | null
 }
 
@@ -64,12 +70,19 @@ export interface BrowseResponse {
   entries: BrowseEntry[]
 }
 
-export interface MkvTrack {
-  id: number
+export interface VideoTrack {
+  id: number // absolute ffmpeg stream index (use directly with -map 0:<id>)
   codec: string
   codec_id: string
   language: string
   name: string
   ext: string | null
   supported: boolean
+}
+
+export interface OllamaHealth {
+  configured: boolean
+  ok: boolean
+  model_count?: number
+  error?: string
 }

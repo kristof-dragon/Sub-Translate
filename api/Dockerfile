@@ -4,10 +4,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
-# mkvtoolnix ships `mkvmerge` (for track listing via -J) and `mkvextract`
-# (for pulling a specific subtitle track out of an MKV).
+# ffmpeg ships `ffprobe` (JSON subtitle stream enumeration) and `ffmpeg`
+# (stream-copy / codec-convert subtitle extraction). It handles MKV, MP4,
+# WebM, AVI, MOV, TS, and more — wider coverage than mkvtoolnix and the
+# same binary produces SRT/VTT natively via `-c:s srt`.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends mkvtoolnix \
+    && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /srv

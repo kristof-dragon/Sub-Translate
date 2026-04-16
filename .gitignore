@@ -21,6 +21,8 @@ dist/
 .vite/
 *.log
 *.tsbuildinfo
+# tsc -b emit next to sources (vite handles TS directly; we only want the typecheck)
+web/src/**/*.js
 
 # Editor / OS
 .vscode/

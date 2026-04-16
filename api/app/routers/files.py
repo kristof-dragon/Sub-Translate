@@ -7,6 +7,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -29,6 +30,17 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def _project_dir(project_id: int) -> Path:
+    """Per-project storage root: /data/uploads/<project_id>/.
+
+    Keeping uploads partitioned by project makes manual cleanup / backup easy
+    and avoids a single directory ballooning with every project's files.
+    """
+    p = UPLOAD_DIR / str(project_id)
+    p.mkdir(parents=True, exist_ok=True)
+    return p
 
 
 def _serialize(f: models.File) -> dict:
@@ -101,7 +113,7 @@ async def upload_files(
         db.add(row)
         db.flush()  # assign id
 
-        stored = UPLOAD_DIR / f"{row.id}_{row.original_filename}"
+        stored = _project_dir(project_id) / f"{row.id}_{row.original_filename}"
         stored.write_bytes(content)
         row.stored_original_path = str(stored)
         db.commit()
@@ -148,6 +160,61 @@ def delete_file(file_id: int, db: Session = Depends(get_db)):
                 pass
     db.delete(f)
     db.commit()
+
+
+class TranslateIn(BaseModel):
+    target_lang: str = Field(min_length=1)
+    model: Optional[str] = None
+
+
+@router.post("/files/{file_id}/translate", status_code=202)
+async def translate_file(
+    file_id: int,
+    data: TranslateIn,
+    db: Session = Depends(get_db),
+):
+    """(Re)queue a file for translation.
+
+    Works for files in `extracted`, `done`, or `error` status — typical use is
+    "I just demuxed a subtitle from an MKV, now translate it" or "the previous
+    run failed, try again". Files currently mid-flight (queued/detecting/
+    translating) are rejected so we don't double-queue the same job.
+    """
+    f = db.get(models.File, file_id)
+    if not f:
+        raise HTTPException(404, "File not found")
+    if f.status in ("queued", "detecting", "translating"):
+        raise HTTPException(409, f"File is already {f.status}")
+    if not f.stored_original_path or not os.path.exists(f.stored_original_path):
+        raise HTTPException(400, "Original file is missing on disk")
+
+    proj = db.get(models.Project, f.project_id)
+    settings = db.get(models.Settings, 1)
+    if not settings or not settings.ollama_url:
+        raise HTTPException(400, "Ollama not configured — set URL in Settings first")
+
+    effective_model = (
+        data.model
+        or f.model
+        or (proj.default_model if proj else "")
+        or settings.default_model
+        or ""
+    ).strip()
+    if not effective_model:
+        raise HTTPException(400, "No model selected — pick one in Settings or the project")
+
+    f.target_lang = data.target_lang.strip()
+    f.model = effective_model
+    f.status = "queued"
+    f.progress_pct = 0
+    f.error = ""
+    f.detected_lang = ""
+    f.stored_translated_path = ""
+    db.commit()
+    db.refresh(f)
+
+    await job_queue.put(f.id)
+    return _serialize(f)
 
 
 @router.get("/files/{file_id}/download")

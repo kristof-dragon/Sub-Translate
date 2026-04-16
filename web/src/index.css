@@ -88,6 +88,35 @@ label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 13px
 }
 .hamburger:hover { background: var(--surface-2); }
 
+.llm-status {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.llm-status:hover { background: var(--surface-2); }
+.llm-status-label {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+.llm-status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--muted);
+  box-shadow: 0 0 0 0 currentColor;
+}
+.llm-status-dot.ok   { background: var(--success); }
+.llm-status-dot.down { background: var(--error); }
+.llm-status-dot.unconfigured { background: var(--warn); }
+
 .layout { display: flex; flex: 1; overflow: hidden; }
 
 .drawer {
@@ -160,6 +189,7 @@ label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 13px
   color: var(--muted);
 }
 .badge.queued { }
+.badge.extracted { color: var(--muted); border-color: var(--border); }
 .badge.detecting { color: var(--warn); border-color: var(--warn); }
 .badge.translating { color: var(--accent); border-color: var(--accent); }
 .badge.done { color: var(--success); border-color: var(--success); }

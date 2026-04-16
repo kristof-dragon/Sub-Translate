@@ -1,39 +1,25 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
-import type { BrowseResponse, Language, MkvTrack } from '../types'
+import type { BrowseResponse, VideoTrack } from '../types'
 
 interface Props {
-  defaultTargetLang: string
-  defaultModel: string
-  languages: Language[]
-  models: { name: string }[]
   onCancel: () => void
-  onQueue: (body: {
-    mkv_path: string
-    track_ids: number[]
-    target_lang: string
-    model?: string
-  }) => Promise<void>
+  onExtract: (body: { video_path: string; track_ids: number[] }) => Promise<void>
 }
 
-/** Two-step modal: pick an MKV from the bind-mounted media folder, then pick tracks. */
-export default function MkvBrowser({
-  defaultTargetLang,
-  defaultModel,
-  languages,
-  models,
-  onCancel,
-  onQueue,
-}: Props) {
+/**
+ * Two-step modal: pick a video from the bind-mounted media folder, then pick
+ * the subtitle tracks to extract. Extraction only demuxes the tracks into the
+ * project — translation is a separate step triggered from the file list.
+ */
+export default function VideoBrowser({ onCancel, onExtract }: Props) {
   const [view, setView] = useState<BrowseResponse | null>(null)
   const [err, setErr] = useState('')
   const [loading, setLoading] = useState(false)
 
-  const [selectedMkv, setSelectedMkv] = useState<string | null>(null)
-  const [tracks, setTracks] = useState<MkvTrack[]>([])
+  const [selectedVideo, setSelectedVideo] = useState<string | null>(null)
+  const [tracks, setTracks] = useState<VideoTrack[]>([])
   const [selectedTracks, setSelectedTracks] = useState<Set<number>>(new Set())
-  const [targetLang, setTargetLang] = useState(defaultTargetLang)
-  const [model, setModel] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
   const loadDir = async (path: string) => {
@@ -52,15 +38,17 @@ export default function MkvBrowser({
     loadDir('')
   }, [])
 
-  const pickMkv = async (relPath: string) => {
+  const pickVideo = async (relPath: string) => {
     setLoading(true)
     setErr('')
     try {
-      const r = await api.mkvTracks(relPath)
-      setSelectedMkv(relPath)
+      const r = await api.videoTracks(relPath)
+      setSelectedVideo(relPath)
       setTracks(r.tracks)
       // Default: tick every supported track so the common case is one click.
-      setSelectedTracks(new Set(r.tracks.filter((t) => t.supported).map((t) => t.id)))
+      setSelectedTracks(
+        new Set(r.tracks.filter((t) => t.supported).map((t) => t.id)),
+      )
     } catch (e: unknown) {
       setErr(String(e))
     } finally {
@@ -77,19 +65,13 @@ export default function MkvBrowser({
     })
 
   const submit = async () => {
-    if (!selectedMkv || selectedTracks.size === 0) return
-    if (!targetLang) {
-      setErr('Pick a target language first')
-      return
-    }
+    if (!selectedVideo || selectedTracks.size === 0) return
     setSubmitting(true)
     setErr('')
     try {
-      await onQueue({
-        mkv_path: selectedMkv,
+      await onExtract({
+        video_path: selectedVideo,
         track_ids: Array.from(selectedTracks),
-        target_lang: targetLang,
-        model: model || undefined,
       })
     } catch (e: unknown) {
       setErr(String(e))
@@ -99,7 +81,7 @@ export default function MkvBrowser({
   }
 
   const backToBrowse = () => {
-    setSelectedMkv(null)
+    setSelectedVideo(null)
     setTracks([])
     setSelectedTracks(new Set())
   }
@@ -109,34 +91,29 @@ export default function MkvBrowser({
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="row between" style={{ marginBottom: 12 }}>
           <h3 style={{ margin: 0 }}>
-            {selectedMkv ? 'Pick tracks to translate' : 'Add from MKV — pick a file'}
+            {selectedVideo
+              ? 'Pick subtitle tracks to extract'
+              : 'Add from video — pick a file'}
           </h3>
           <button onClick={onCancel}>Close</button>
         </div>
 
         {err && <div className="error-msg">{err}</div>}
 
-        {!selectedMkv ? (
+        {!selectedVideo ? (
           <BrowserPane
             view={view}
             loading={loading}
             onNavigate={loadDir}
-            onPick={pickMkv}
+            onPick={pickVideo}
           />
         ) : (
           <TrackPane
-            mkvPath={selectedMkv}
+            videoPath={selectedVideo}
             tracks={tracks}
             selected={selectedTracks}
             onToggle={toggle}
             onBack={backToBrowse}
-            targetLang={targetLang}
-            setTargetLang={setTargetLang}
-            model={model}
-            setModel={setModel}
-            defaultModel={defaultModel}
-            languages={languages}
-            models={models}
             onSubmit={submit}
             submitting={submitting}
           />
@@ -206,43 +183,29 @@ function BrowserPane({
 }
 
 function TrackPane({
-  mkvPath,
+  videoPath,
   tracks,
   selected,
   onToggle,
   onBack,
-  targetLang,
-  setTargetLang,
-  model,
-  setModel,
-  defaultModel,
-  languages,
-  models,
   onSubmit,
   submitting,
 }: {
-  mkvPath: string
-  tracks: MkvTrack[]
+  videoPath: string
+  tracks: VideoTrack[]
   selected: Set<number>
   onToggle: (id: number) => void
   onBack: () => void
-  targetLang: string
-  setTargetLang: (s: string) => void
-  model: string
-  setModel: (s: string) => void
-  defaultModel: string
-  languages: Language[]
-  models: { name: string }[]
   onSubmit: () => void
   submitting: boolean
 }) {
   const supportedCount = tracks.filter((t) => t.supported).length
   return (
     <div className="stack">
-      <div className="muted small">File: {mkvPath}</div>
+      <div className="muted small">File: {videoPath}</div>
       {supportedCount === 0 && (
         <div className="error-msg">
-          No supported (text) subtitle tracks found in this MKV. ASS/SSA/PGS are
+          No supported (text) subtitle tracks found. ASS/SSA/PGS/VobSub are
           detected but not yet translatable.
         </div>
       )}
@@ -250,7 +213,7 @@ function TrackPane({
         <thead>
           <tr>
             <th style={{ width: 32 }}></th>
-            <th style={{ width: 40 }}>ID</th>
+            <th style={{ width: 40 }}>#</th>
             <th>Language</th>
             <th>Name</th>
             <th>Codec</th>
@@ -272,7 +235,7 @@ function TrackPane({
               <td>{t.language || '—'}</td>
               <td>{t.name || '—'}</td>
               <td className="small muted">
-                {t.codec_id || t.codec}
+                {t.codec}
                 {!t.supported && ' (not supported)'}
               </td>
             </tr>
@@ -280,35 +243,21 @@ function TrackPane({
         </tbody>
       </table>
 
-      <div className="form-grid">
-        <div>
-          <label>Target language *</label>
-          <select value={targetLang} onChange={(e) => setTargetLang(e.target.value)}>
-            <option value="">Select…</option>
-            {languages.map((l) => (
-              <option key={l.code} value={l.code}>{l.name}</option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label>Model {defaultModel && `(default: ${defaultModel})`}</label>
-          <select value={model} onChange={(e) => setModel(e.target.value)}>
-            <option value="">(use project / global default)</option>
-            {models.map((m) => (
-              <option key={m.name} value={m.name}>{m.name}</option>
-            ))}
-          </select>
-        </div>
+      <div className="muted small">
+        Tracks will be extracted into this project as subtitle files. Translate
+        them afterwards with the Translate button on each row.
       </div>
 
       <div className="row between">
         <button onClick={onBack}>&larr; Back to browser</button>
         <button
           className="primary"
-          disabled={submitting || selected.size === 0 || !targetLang}
+          disabled={submitting || selected.size === 0}
           onClick={onSubmit}
         >
-          {submitting ? 'Extracting…' : `Extract & queue ${selected.size} track${selected.size === 1 ? '' : 's'}`}
+          {submitting
+            ? 'Extracting…'
+            : `Extract ${selected.size} track${selected.size === 1 ? '' : 's'}`}
         </button>
       </div>
     </div>

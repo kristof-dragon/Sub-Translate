@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from . import models
 from .db import SessionLocal, init_db
-from .routers import files, jobs, mkv, projects, settings
+from .routers import files, jobs, projects, settings, video
 from .worker import worker_loop
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -47,7 +47,7 @@ async def lifespan(app: FastAPI):
             pass
 
 
-app = FastAPI(title="Subtitle Translator API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Subtitle Translator API", version="1.1.0", lifespan=lifespan)
 
 # Permissive CORS — the app is internal-only and served behind the web container's nginx.
 app.add_middleware(
@@ -61,7 +61,7 @@ app.include_router(projects.router, prefix="/api")
 app.include_router(files.router, prefix="/api")
 app.include_router(settings.router, prefix="/api")
 app.include_router(jobs.router, prefix="/api")
-app.include_router(mkv.router, prefix="/api")
+app.include_router(video.router, prefix="/api")
 
 
 @app.get("/api/health")

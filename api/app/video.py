@@ -1,0 +1,241 @@
+"""Video (MKV / MP4 / WebM / etc.) browsing + subtitle track discovery + extraction.
+
+Uses ffprobe for JSON stream enumeration and ffmpeg for extraction. Compared
+with the previous mkvtoolnix-based implementation this covers more container
+formats (mp4, webm, mov, avi, ts, ...) and lets us transmux MP4's `mov_text`
+into SRT via `-c:s srt` — mkvtoolnix couldn't touch MP4 at all.
+
+All filesystem access is constrained to `MEDIA_DIR` via `resolve_media_path` —
+the bind-mounted folder is the only thing the API is permitted to read. Any
+user-supplied path that resolves outside that root is rejected, so `../` tricks
+cannot escape to arbitrary host files.
+"""
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+
+MEDIA_DIR = Path(os.environ.get("MEDIA_DIR", "/media"))
+
+# Container extensions the browser will surface. Case-insensitive match.
+VIDEO_EXTS: set[str] = {
+    ".mkv", ".mp4", ".m4v", ".mov", ".avi", ".webm",
+    ".ts", ".mpg", ".mpeg", ".flv",
+}
+
+# ffprobe `codec_name` → (output extension, is-translatable-text, ffmpeg `-c:s` arg).
+#
+# We translate text-based formats only. Bitmap formats (PGS / VobSub / DVB) would
+# need OCR before translation, which is out of scope. ASS/SSA is text but our
+# SRT/VTT parsers don't handle its style overrides yet. `mov_text` is MP4's
+# internal text format — ffmpeg can transmux it to SRT with `-c:s srt`.
+CODEC_MAP: dict[str, tuple[str, bool, str]] = {
+    "subrip":            ("srt", True,  "copy"),
+    "srt":               ("srt", True,  "copy"),   # alias some builds emit
+    "webvtt":            ("vtt", True,  "copy"),
+    "mov_text":          ("srt", True,  "srt"),    # MP4 tx3g → SRT
+    "ass":               ("ass", False, "copy"),
+    "ssa":               ("ass", False, "copy"),
+    "hdmv_pgs_subtitle": ("sup", False, "copy"),
+    "dvd_subtitle":      ("sub", False, "copy"),
+    "dvb_subtitle":      ("sub", False, "copy"),
+}
+
+
+class MediaPathError(Exception):
+    """Raised when a requested path cannot be served (missing, outside root, wrong type)."""
+
+
+@dataclass
+class BrowseEntry:
+    name: str
+    is_dir: bool
+    is_video: bool
+    size: int | None
+
+
+@dataclass
+class VideoTrack:
+    """One subtitle stream inside a container.
+
+    `id` is the ABSOLUTE ffmpeg stream index (e.g. `0:3`), so it can be passed
+    straight to `ffmpeg -map 0:<id>` without any re-indexing.
+    """
+
+    id: int
+    codec: str
+    codec_id: str  # same value as `codec`; kept for frontend compatibility
+    language: str
+    name: str
+    ext: str | None
+    supported: bool
+
+
+def _media_root() -> Path:
+    if not MEDIA_DIR.exists():
+        raise MediaPathError(
+            f"Media directory {MEDIA_DIR} is not mounted — set MEDIA_PATH in .env"
+        )
+    return MEDIA_DIR.resolve()
+
+
+def resolve_media_path(relative: str) -> Path:
+    """Resolve `relative` under MEDIA_DIR, refusing any escape from the root."""
+    root = _media_root()
+    rel = (relative or "").lstrip("/").strip()
+    target = (root / rel).resolve() if rel else root
+    try:
+        target.relative_to(root)
+    except ValueError as exc:
+        raise MediaPathError("Path escapes media root") from exc
+    if not target.exists():
+        raise MediaPathError("Path not found")
+    return target
+
+
+def browse(relative: str = "") -> dict:
+    """List a directory under MEDIA_DIR.
+
+    Returns only sub-directories (always) and video files with a whitelisted
+    extension. Other files (e.g. `.txt`, `.nfo`) are hidden to keep the picker
+    focused on the task at hand.
+    """
+    path = resolve_media_path(relative)
+    if not path.is_dir():
+        raise MediaPathError("Not a directory")
+
+    root = _media_root()
+    entries: list[BrowseEntry] = []
+    for p in sorted(path.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
+        if p.name.startswith("."):
+            continue
+        is_dir = p.is_dir()
+        is_video = p.is_file() and p.suffix.lower() in VIDEO_EXTS
+        if not is_dir and not is_video:
+            continue
+        entries.append(
+            BrowseEntry(
+                name=p.name,
+                is_dir=is_dir,
+                is_video=is_video,
+                size=p.stat().st_size if p.is_file() else None,
+            )
+        )
+
+    rel_str = "" if path == root else str(path.relative_to(root))
+    parent_str: str | None
+    if path == root:
+        parent_str = None
+    else:
+        parent = path.parent
+        parent_str = "" if parent == root else str(parent.relative_to(root))
+
+    return {
+        "path": rel_str,
+        "parent": parent_str,
+        "entries": [e.__dict__ for e in entries],
+    }
+
+
+def list_video_tracks(relative: str) -> list[VideoTrack]:
+    """Return the subtitle tracks found inside a video container at `relative`.
+
+    Runs `ffprobe -select_streams s` and maps each stream through CODEC_MAP.
+    """
+    path = resolve_media_path(relative)
+    if not path.is_file():
+        raise MediaPathError("Not a file")
+    if path.suffix.lower() not in VIDEO_EXTS:
+        raise MediaPathError(f"Unsupported video extension: {path.suffix}")
+
+    try:
+        proc = subprocess.run(
+            [
+                "ffprobe",
+                "-v", "quiet",
+                "-print_format", "json",
+                "-show_streams",
+                "-select_streams", "s",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=120,
+        )
+    except FileNotFoundError as exc:
+        raise MediaPathError("ffprobe is not installed in the api container") from exc
+    except subprocess.CalledProcessError as exc:
+        raise MediaPathError(f"ffprobe failed: {exc.stderr.strip() or exc}") from exc
+
+    data = json.loads(proc.stdout or "{}")
+    return [_track_from_json(s) for s in data.get("streams", [])]
+
+
+def _track_from_json(s: dict) -> VideoTrack:
+    codec = str(s.get("codec_name") or "").lower()
+    ext, supported, _ = CODEC_MAP.get(codec, (None, False, "copy"))
+    tags = s.get("tags", {}) or {}
+    return VideoTrack(
+        id=int(s.get("index", 0)),
+        codec=codec,
+        codec_id=codec,
+        language=str(tags.get("language") or ""),
+        name=str(tags.get("title") or ""),
+        ext=ext,
+        supported=supported,
+    )
+
+
+def extract_track(relative: str, track_index: int, out_path: Path) -> None:
+    """Extract one subtitle stream to `out_path` using ffmpeg.
+
+    Picks the right `-c:s` flag from CODEC_MAP: `copy` for already-text formats
+    (srt/webvtt/ass/pgs/...), `srt` for MP4's mov_text to produce a clean .srt.
+    """
+    vid_path = resolve_media_path(relative)
+    if not vid_path.is_file():
+        raise MediaPathError("Not a file")
+    if vid_path.suffix.lower() not in VIDEO_EXTS:
+        raise MediaPathError(f"Unsupported video extension: {vid_path.suffix}")
+
+    # Re-probe so we can look up the right codec arg for this specific stream,
+    # and reject unsupported codecs before spawning ffmpeg.
+    tracks = list_video_tracks(relative)
+    track = next((t for t in tracks if t.id == track_index), None)
+    if track is None:
+        raise MediaPathError(f"Track {track_index} not found")
+    if not track.supported:
+        raise MediaPathError(
+            f"Track {track_index} codec {track.codec!r} is not a translatable text format"
+        )
+    codec_arg = CODEC_MAP[track.codec][2]
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel", "error",
+                "-y",
+                "-i", str(vid_path),
+                "-map", f"0:{int(track_index)}",
+                "-c:s", codec_arg,
+                str(out_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=1800,
+        )
+    except FileNotFoundError as exc:
+        raise MediaPathError("ffmpeg is not installed in the api container") from exc
+    except subprocess.CalledProcessError as exc:
+        raise MediaPathError(f"ffmpeg failed: {exc.stderr.strip() or exc}") from exc
+
+    if not out_path.exists() or out_path.stat().st_size == 0:
+        raise MediaPathError("ffmpeg produced no output")

@@ -2,10 +2,11 @@ import type {
   AppSettings,
   BrowseResponse,
   Language,
-  MkvTrack,
+  OllamaHealth,
   OllamaModel,
   Project,
   SubtitleFile,
+  VideoTrack,
 } from './types'
 
 const BASE = '/api'
@@ -63,22 +64,25 @@ export const api = {
 
   browse: (path = '') =>
     request<BrowseResponse>(`/browse?path=${encodeURIComponent(path)}`),
-  mkvTracks: (path: string) =>
-    request<{ tracks: MkvTrack[] }>(`/mkv/tracks?path=${encodeURIComponent(path)}`),
-  fromMkv: (
+  videoTracks: (path: string) =>
+    request<{ tracks: VideoTrack[] }>(
+      `/video/tracks?path=${encodeURIComponent(path)}`,
+    ),
+  extractTracks: (
     pid: number,
-    body: {
-      mkv_path: string
-      track_ids: number[]
-      target_lang: string
-      model?: string
-    },
+    body: { video_path: string; track_ids: number[] },
   ) =>
-    request<SubtitleFile[]>(`/projects/${pid}/from-mkv`, jsonInit('POST', body)),
+    request<SubtitleFile[]>(`/projects/${pid}/extract`, jsonInit('POST', body)),
+
+  translateFile: (
+    fid: number,
+    body: { target_lang: string; model?: string },
+  ) => request<SubtitleFile>(`/files/${fid}/translate`, jsonInit('POST', body)),
 
   getSettings: () => request<AppSettings>('/settings'),
   updateSettings: (data: Partial<AppSettings & { ollama_api_key: string }>) =>
     request<AppSettings>('/settings', jsonInit('PUT', data)),
   listModels: () => request<{ models: OllamaModel[] }>('/settings/models'),
   listLanguages: () => request<Language[]>('/settings/languages'),
+  ollamaHealth: () => request<OllamaHealth>('/settings/ollama-health'),
 }

@@ -84,6 +84,26 @@ async def list_ollama_models(db: Session = Depends(get_db)):
     }
 
 
+@router.get("/ollama-health")
+async def ollama_health(db: Session = Depends(get_db)):
+    """Lightweight probe used by the topbar status dot.
+
+    Returns one of three states so the UI can render green/red/yellow:
+      - configured=False            → yellow (no URL saved yet)
+      - configured=True, ok=True    → green  (Ollama reachable)
+      - configured=True, ok=False   → red    (configured but unreachable)
+    """
+    s = db.get(models.Settings, 1)
+    if not s or not s.ollama_url:
+        return {"configured": False, "ok": False}
+    try:
+        async with OllamaClient(s.ollama_url, s.ollama_api_key or None, timeout=5.0) as client:
+            models_list = await client.list_models()
+        return {"configured": True, "ok": True, "model_count": len(models_list)}
+    except Exception as exc:  # noqa: BLE001
+        return {"configured": True, "ok": False, "error": str(exc)}
+
+
 @router.get("/languages")
 def list_languages():
     return [{"code": code, "name": name} for code, name in LANGUAGES]

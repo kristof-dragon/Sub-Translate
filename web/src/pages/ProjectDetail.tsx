@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api } from '../api'
-import MkvBrowser from '../components/MkvBrowser'
+import VideoBrowser from '../components/VideoBrowser'
 import UploadDropzone from '../components/UploadDropzone'
 import type {
   AppSettings,
@@ -26,7 +26,7 @@ export default function ProjectDetail() {
   const [model, setModel] = useState('')
   const [err, setErr] = useState('')
   const [uploading, setUploading] = useState(false)
-  const [mkvOpen, setMkvOpen] = useState(false)
+  const [videoOpen, setVideoOpen] = useState(false)
 
   // Load project + its files + surrounding context in parallel.
   const reload = useCallback(async () => {
@@ -116,6 +116,27 @@ export default function ProjectDetail() {
     setFiles((rows) => rows.filter((r) => r.id !== fid))
   }
 
+  const handleTranslate = async (fid: number) => {
+    if (!targetLang) {
+      setErr('Pick a target language at the top of the page first')
+      return
+    }
+    if (!effectiveModel) {
+      setErr('No model available — configure one in Settings')
+      return
+    }
+    setErr('')
+    try {
+      const updated = await api.translateFile(fid, {
+        target_lang: targetLang,
+        model: model || undefined,
+      })
+      setFiles((rows) => rows.map((r) => (r.id === fid ? updated : r)))
+    } catch (e: unknown) {
+      setErr(String(e))
+    }
+  }
+
   if (!project) {
     return <div className="empty">{err || 'Loading…'}</div>
   }
@@ -157,23 +178,20 @@ export default function ProjectDetail() {
         <UploadDropzone onFiles={handleUpload} disabled={!targetLang || uploading} />
 
         <div className="row" style={{ marginTop: 8 }}>
-          <button onClick={() => setMkvOpen(true)}>Add from MKV…</button>
+          <button onClick={() => setVideoOpen(true)}>Add from video…</button>
           <span className="small muted">
-            Browse the bind-mounted media folder and pick subtitle tracks to extract.
+            Browse the bind-mounted media folder (MKV, MP4, WebM, …) and extract
+            subtitle tracks. Translate them afterwards from the file list.
           </span>
         </div>
       </div>
 
-      {mkvOpen && (
-        <MkvBrowser
-          defaultTargetLang={targetLang || project.default_target_lang}
-          defaultModel={effectiveModel}
-          languages={languages}
-          models={models}
-          onCancel={() => setMkvOpen(false)}
-          onQueue={async (body) => {
-            await api.fromMkv(projectId, body)
-            setMkvOpen(false)
+      {videoOpen && (
+        <VideoBrowser
+          onCancel={() => setVideoOpen(false)}
+          onExtract={async (body) => {
+            await api.extractTracks(projectId, body)
+            setVideoOpen(false)
             await reload()
           }}
         />
@@ -196,7 +214,12 @@ export default function ProjectDetail() {
             </thead>
             <tbody>
               {files.map((f) => (
-                <FileRow key={f.id} f={f} onDelete={handleDelete} />
+                <FileRow
+                  key={f.id}
+                  f={f}
+                  onDelete={handleDelete}
+                  onTranslate={handleTranslate}
+                />
               ))}
             </tbody>
           </table>
@@ -209,14 +232,20 @@ export default function ProjectDetail() {
 function FileRow({
   f,
   onDelete,
+  onTranslate,
 }: {
   f: SubtitleFile
   onDelete: (id: number) => void
+  onTranslate: (id: number) => void
 }) {
   const barRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (barRef.current) barRef.current.style.width = `${f.progress_pct}%`
   }, [f.progress_pct])
+
+  // Translate button is offered on any row that isn't currently mid-flight —
+  // covers first-run (extracted), retry (error), and re-translate (done).
+  const canTranslate = ['extracted', 'done', 'error'].includes(f.status)
 
   return (
     <tr>
@@ -226,12 +255,22 @@ function FileRow({
       </td>
       <td><span className={`badge ${f.status}`}>{f.status}</span></td>
       <td className="small muted">{f.detected_lang || '—'}</td>
-      <td className="small">{f.target_lang}</td>
+      <td className="small">{f.target_lang || '—'}</td>
       <td style={{ minWidth: 160 }}>
         <div className="progress"><div ref={barRef} /></div>
         <div className="small muted">{f.progress_pct}%</div>
       </td>
       <td style={{ whiteSpace: 'nowrap' }}>
+        {canTranslate && (
+          <button
+            className="small"
+            onClick={() => onTranslate(f.id)}
+            style={{ marginRight: 8 }}
+            title="Queue this file for translation using the target language selected at the top of the page"
+          >
+            Translate
+          </button>
+        )}
         {f.translated_available && (
           <a
             href={api.downloadUrl(f.id)}
