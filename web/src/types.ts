@@ -1,4 +1,5 @@
 export type FileStatus =
+  | 'extracting'
   | 'extracted'
   | 'queued'
   | 'detecting'

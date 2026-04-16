@@ -46,9 +46,10 @@ class File(Base):
     detected_lang = Column(String, default="", nullable=False)
     target_lang = Column(String, nullable=False)
     model = Column(String, default="", nullable=False)
-    # extracted | queued | detecting | translating | done | error
-    # "extracted" = demuxed from a video container but not yet scheduled for
-    # translation; a follow-up POST /files/{id}/translate moves it to "queued".
+    # extracting | extracted | queued | detecting | translating | done | error
+    # "extracting" = ffmpeg demux is queued/in-flight (async extraction worker).
+    # "extracted"  = demux finished; raw subtitle on disk, not yet translated.
+    #                A follow-up POST /files/{id}/translate moves it to "queued".
     status = Column(String, default="queued", nullable=False)
     progress_pct = Column(Integer, default=0, nullable=False)
     error = Column(Text, default="", nullable=False)

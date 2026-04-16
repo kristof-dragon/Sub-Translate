@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import models
 from .db import SessionLocal, init_db
 from .routers import files, jobs, projects, settings, video
-from .worker import worker_loop
+from .worker import extraction_worker_loop, worker_loop
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("app")
@@ -21,12 +21,16 @@ log = logging.getLogger("app")
 async def lifespan(app: FastAPI):
     init_db()
 
-    # Anything left mid-flight from a prior run is marked errored — the queue is
-    # in-memory, so those jobs would otherwise hang forever as "translating".
+    # Anything left mid-flight from a prior run is marked errored — both queues
+    # are in-memory, so those jobs would otherwise hang forever in the UI.
     with SessionLocal() as db:
         stale = (
             db.query(models.File)
-            .filter(models.File.status.in_(("queued", "detecting", "translating")))
+            .filter(
+                models.File.status.in_(
+                    ("extracting", "queued", "detecting", "translating")
+                )
+            )
             .all()
         )
         for row in stale:
@@ -36,15 +40,18 @@ async def lifespan(app: FastAPI):
             db.commit()
             log.info("marked %d stale files as errored on startup", len(stale))
 
-    task = asyncio.create_task(worker_loop(), name="translate-worker")
+    translate_task = asyncio.create_task(worker_loop(), name="translate-worker")
+    extract_task = asyncio.create_task(extraction_worker_loop(), name="extract-worker")
     try:
         yield
     finally:
-        task.cancel()
-        try:
-            await task
-        except (asyncio.CancelledError, Exception):  # noqa: BLE001
-            pass
+        for t in (translate_task, extract_task):
+            t.cancel()
+        for t in (translate_task, extract_task):
+            try:
+                await t
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
 
 
 app = FastAPI(title="Subtitle Translator API", version="1.1.0", lifespan=lifespan)

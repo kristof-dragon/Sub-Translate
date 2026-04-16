@@ -188,10 +188,17 @@ export default function ProjectDetail() {
 
       {videoOpen && (
         <VideoBrowser
-          onCancel={() => setVideoOpen(false)}
+          onCancel={() => {
+            setVideoOpen(false)
+            // Pick up any rows the SSE stream missed while the modal was open
+            // (e.g. race on first render).
+            reload()
+          }}
           onExtract={async (body) => {
             await api.extractTracks(projectId, body)
-            setVideoOpen(false)
+            // Don't close the modal — the extraction is now running on the
+            // server-side queue and the operator may want to queue more videos.
+            // SSE will update the file list live as extractions finish.
             await reload()
           }}
         />

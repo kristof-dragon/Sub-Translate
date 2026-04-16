@@ -189,6 +189,7 @@ label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 13px
   color: var(--muted);
 }
 .badge.queued { }
+.badge.extracting { color: var(--accent); border-color: var(--accent); }
 .badge.extracted { color: var(--muted); border-color: var(--border); }
 .badge.detecting { color: var(--warn); border-color: var(--warn); }
 .badge.translating { color: var(--accent); border-color: var(--accent); }

@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from .. import models, video
 from ..db import SessionLocal
+from ..worker import extract_queue
 
 router = APIRouter(tags=["video"])
 
@@ -79,17 +80,22 @@ class ExtractIn(BaseModel):
     track_ids: list[int] = Field(min_length=1)
 
 
-@router.post("/projects/{project_id}/extract", status_code=201)
-def extract_to_project(
+@router.post("/projects/{project_id}/extract", status_code=202)
+async def extract_to_project(
     project_id: int,
     data: ExtractIn,
     db: Session = Depends(get_db),
 ):
-    """Extract subtitle tracks into the project — no translation yet.
+    """Queue subtitle extractions for this project and return immediately.
 
-    Each extracted track becomes a File row in `extracted` status. Operators
-    can then download the raw subtitle, or click Translate on the row to
-    kick off the detect → translate → write pipeline.
+    We validate the selected tracks synchronously (probe the video once, reject
+    unsupported codecs) so the operator gets instant feedback on bad picks.
+    The actual ffmpeg demux runs on the `extract_queue` worker — each File row
+    starts in `extracting` status and flips to `extracted` once its ffmpeg job
+    finishes (clients watch /api/events for the live status change).
+
+    This lets the UI drop more videos into the queue while earlier ones are
+    still being demuxed.
     """
     proj = db.get(models.Project, project_id)
     if not proj:
@@ -113,7 +119,8 @@ def extract_to_project(
             )
 
     stem = Path(data.video_path).stem
-    proj_dir = _project_dir(project_id)
+    # Ensure the project dir exists now so the worker doesn't race on first run.
+    _project_dir(project_id)
     created: list[dict] = []
 
     for tid in data.track_ids:
@@ -129,24 +136,15 @@ def extract_to_project(
             format=track.ext,
             target_lang="",  # not translating yet — Translate button provides this later
             model="",
-            status="extracted",
+            status="extracting",
             progress_pct=0,
             stored_original_path="",
         )
         db.add(row)
-        db.flush()
-
-        out_path = proj_dir / f"{row.id}_{filename}"
-        try:
-            video.extract_track(data.video_path, tid, out_path)
-        except video.MediaPathError as exc:
-            db.delete(row)
-            db.commit()
-            raise HTTPException(500, f"Extraction failed: {exc}")
-
-        row.stored_original_path = str(out_path)
         db.commit()
         db.refresh(row)
+
+        await extract_queue.put((row.id, data.video_path, tid))
         created.append(_serialize_file(row))
 
     return created

@@ -21,6 +21,9 @@ export default function VideoBrowser({ onCancel, onExtract }: Props) {
   const [tracks, setTracks] = useState<VideoTrack[]>([])
   const [selectedTracks, setSelectedTracks] = useState<Set<number>>(new Set())
   const [submitting, setSubmitting] = useState(false)
+  // Running total of tracks this modal has dispatched to the extract queue,
+  // so the operator can see they actually did queue stuff as they browse on.
+  const [queuedCount, setQueuedCount] = useState(0)
 
   const loadDir = async (path: string) => {
     setLoading(true)
@@ -68,11 +71,18 @@ export default function VideoBrowser({ onCancel, onExtract }: Props) {
     if (!selectedVideo || selectedTracks.size === 0) return
     setSubmitting(true)
     setErr('')
+    const count = selectedTracks.size
     try {
       await onExtract({
         video_path: selectedVideo,
         track_ids: Array.from(selectedTracks),
       })
+      // Extraction runs async on the server. Bump the counter and drop back to
+      // the file picker so the operator can queue another video right away.
+      setQueuedCount((n) => n + count)
+      setSelectedVideo(null)
+      setTracks([])
+      setSelectedTracks(new Set())
     } catch (e: unknown) {
       setErr(String(e))
     } finally {
@@ -95,7 +105,16 @@ export default function VideoBrowser({ onCancel, onExtract }: Props) {
               ? 'Pick subtitle tracks to extract'
               : 'Add from video — pick a file'}
           </h3>
-          <button onClick={onCancel}>Close</button>
+          <div className="row" style={{ gap: 8 }}>
+            {queuedCount > 0 && (
+              <span className="badge extracting" title="Tracks queued for ffmpeg extraction in this session">
+                {queuedCount} queued
+              </span>
+            )}
+            <button onClick={onCancel}>
+              {queuedCount > 0 ? 'Done' : 'Close'}
+            </button>
+          </div>
         </div>
 
         {err && <div className="error-msg">{err}</div>}
@@ -256,8 +275,8 @@ function TrackPane({
           onClick={onSubmit}
         >
           {submitting
-            ? 'Extracting…'
-            : `Extract ${selected.size} track${selected.size === 1 ? '' : 's'}`}
+            ? 'Queueing…'
+            : `Queue ${selected.size} track${selected.size === 1 ? '' : 's'}`}
         </button>
       </div>
     </div>

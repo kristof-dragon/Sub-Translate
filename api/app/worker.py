@@ -11,7 +11,7 @@ import logging
 import os
 from pathlib import Path
 
-from . import models
+from . import models, video
 from .db import SessionLocal
 from .detector import detect_language
 from .events import publish
@@ -22,10 +22,17 @@ from .translator import translate_cues
 
 log = logging.getLogger("worker")
 
-# Process-wide FIFO of File.id values waiting to be processed.
+# Process-wide FIFO of File.id values waiting to be translated.
 job_queue: asyncio.Queue[int] = asyncio.Queue()
 
+# Separate FIFO for ffmpeg extractions. Parallel with `job_queue` because ffmpeg
+# and Ollama don't contend for the same resources — an in-flight translation
+# shouldn't stall "drop another video into the queue" from the picker modal.
+# Each item is (file_id, video_relpath, ffmpeg_stream_index).
+extract_queue: asyncio.Queue[tuple[int, str, int]] = asyncio.Queue()
+
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
+UPLOAD_DIR = DATA_DIR / "uploads"
 TRANSLATED_DIR = DATA_DIR / "translated"
 
 
@@ -158,3 +165,45 @@ async def worker_loop() -> None:
             await publish({"file_id": file_id, "status": "error", "error": str(exc)})
         finally:
             job_queue.task_done()
+
+
+async def _process_extraction(file_id: int, video_path: str, track_id: int) -> None:
+    """Run ffmpeg for one already-created File row and flip its status."""
+    with SessionLocal() as db:
+        row = db.get(models.File, file_id)
+        if row is None:
+            return
+        proj_id = row.project_id
+        filename = row.original_filename
+        ext = row.format
+
+    out_path = UPLOAD_DIR / str(proj_id) / f"{file_id}_{filename}"
+    # Blocking ffmpeg — run in a thread so the asyncio loop keeps serving SSE etc.
+    await asyncio.to_thread(video.extract_track, video_path, track_id, out_path)
+
+    # Persist disk path + promote to "extracted" only after ffmpeg produced output.
+    _set_status(
+        file_id,
+        stored_original_path=str(out_path),
+        status="extracted",
+        progress_pct=100,
+        error="",
+    )
+    await publish({"file_id": file_id, "status": "extracted", "progress_pct": 100})
+
+
+async def extraction_worker_loop() -> None:
+    """Run forever: pull extraction jobs and demux them one at a time with ffmpeg."""
+    log.info("extraction worker loop started")
+    while True:
+        file_id, video_path, track_id = await extract_queue.get()
+        try:
+            await _process_extraction(file_id, video_path, track_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            log.exception("extraction for file %s failed", file_id)
+            _set_status(file_id, status="error", error=str(exc))
+            await publish({"file_id": file_id, "status": "error", "error": str(exc)})
+        finally:
+            extract_queue.task_done()
