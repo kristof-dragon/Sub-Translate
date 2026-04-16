@@ -1,0 +1,31 @@
+# Persistent runtime data (uploads, translated files, SQLite DB)
+data/
+*.db
+*.db-journal
+
+# Bind-mounted media folder (user MKVs — never commit these)
+media/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# Node / React
+node_modules/
+dist/
+.vite/
+*.log
+*.tsbuildinfo
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Local env overrides
+.env
