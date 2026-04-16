@@ -37,6 +37,10 @@ export interface AppSettings {
   ollama_api_key_set: boolean
   default_model: string
   chunk_size: number
+  disable_thinking: boolean
+  request_timeout: number // seconds
+  num_ctx: number // 0 = don't send (use model default)
+  context_sent: boolean // derived: true when num_ctx > 0
 }
 
 export interface OllamaModel {

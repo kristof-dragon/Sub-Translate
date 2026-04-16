@@ -8,6 +8,9 @@ export default function Settings() {
   const [apiKey, setApiKey] = useState('')
   const [chunkSize, setChunkSize] = useState(30)
   const [defaultModel, setDefaultModel] = useState('')
+  const [disableThinking, setDisableThinking] = useState(false)
+  const [requestTimeout, setRequestTimeout] = useState(600)
+  const [numCtx, setNumCtx] = useState(0)
   const [models, setModels] = useState<OllamaModel[]>([])
   const [err, setErr] = useState('')
   const [msg, setMsg] = useState('')
@@ -19,6 +22,9 @@ export default function Settings() {
       setUrl(s.ollama_url)
       setDefaultModel(s.default_model)
       setChunkSize(s.chunk_size)
+      setDisableThinking(s.disable_thinking)
+      setRequestTimeout(s.request_timeout)
+      setNumCtx(s.num_ctx)
       if (s.ollama_url) void refreshModels()
     }).catch((e) => setErr(String(e)))
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -48,6 +54,9 @@ export default function Settings() {
         ollama_url: url.trim(),
         default_model: defaultModel,
         chunk_size: chunkSize,
+        disable_thinking: disableThinking,
+        request_timeout: requestTimeout,
+        num_ctx: numCtx,
       }
       if (apiKey) payload.ollama_api_key = apiKey
       const updated = await api.updateSettings(payload)
@@ -139,6 +148,72 @@ export default function Settings() {
               Smaller = more accurate mapping but slower; larger = faster but risks context overrun on smaller models.
             </div>
           </div>
+
+          <div>
+            <label>Request timeout (seconds)</label>
+            <input
+              type="number"
+              min={10}
+              max={7200}
+              value={requestTimeout}
+              onChange={(e) => setRequestTimeout(Number(e.target.value))}
+            />
+            <div className="small muted">
+              Per-call timeout applied to translate and detect requests. Large
+              local models on slow hardware may need several minutes per chunk.
+            </div>
+          </div>
+
+          <div>
+            <label>Context window override (num_ctx)</label>
+            <input
+              type="number"
+              min={0}
+              max={262144}
+              step={512}
+              value={numCtx}
+              onChange={(e) => setNumCtx(Number(e.target.value))}
+            />
+            <div className="small muted">
+              0 = use the model's default (nothing is sent). Any positive value
+              is forwarded as <code>options.num_ctx</code> on every request.
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, margin: 0 }}>
+            <input
+              type="checkbox"
+              checked={disableThinking}
+              onChange={(e) => setDisableThinking(e.target.checked)}
+              style={{ width: 'auto' }}
+            />
+            <span>Disable reasoning dialogue (<code>think=false</code>)</span>
+          </label>
+          <div className="small muted" style={{ marginTop: 4 }}>
+            Skips the chain-of-thought prelude on thinking-capable models
+            (deepseek-r1, qwq, gpt-oss, …). Has no effect on other models.
+          </div>
+        </div>
+
+        <div className="muted small" style={{ borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+          <strong>Request preview:</strong>{' '}
+          {settings?.context_sent
+            ? (
+              <span>
+                each <code>/api/generate</code> call will include
+                {' '}
+                <code>options.num_ctx={settings.num_ctx}</code>
+              </span>
+            )
+            : <span>no <code>context</code> value is attached — model defaults apply</span>}
+          {settings?.disable_thinking && (
+            <span>
+              {' '}· <code>think=false</code>
+            </span>
+          )}
+          {' '}· timeout {settings?.request_timeout ?? '—'}s
         </div>
 
         <div className="row">

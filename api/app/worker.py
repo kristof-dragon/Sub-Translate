@@ -71,6 +71,11 @@ async def _process_file(file_id: int) -> None:
     ollama_url = settings.ollama_url
     api_key = settings.ollama_api_key or None
     chunk_size = int(settings.chunk_size or 30)
+    timeout = float(settings.request_timeout or 600)
+    # Only forward think=False when the operator explicitly toggled it; leaving
+    # it None lets Ollama fall back to the model's own default.
+    think = False if getattr(settings, "disable_thinking", 0) else None
+    num_ctx = int(getattr(settings, "num_ctx", 0) or 0) or None
     model = f.model or (proj.default_model if proj else "") or settings.default_model
     target_lang = f.target_lang or (proj.default_target_lang if proj else "")
 
@@ -95,7 +100,13 @@ async def _process_file(file_id: int) -> None:
     if not cues:
         raise RuntimeError("No cues found in file")
 
-    async with OllamaClient(ollama_url, api_key) as client:
+    async with OllamaClient(
+        ollama_url,
+        api_key,
+        timeout=timeout,
+        think=think,
+        num_ctx=num_ctx,
+    ) as client:
         # 1) Detect language.
         _set_status(file_id, status="detecting", progress_pct=0, error="")
         await publish({"file_id": file_id, "status": "detecting", "progress_pct": 0})

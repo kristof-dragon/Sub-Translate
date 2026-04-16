@@ -28,6 +28,12 @@ class SettingsPatch(BaseModel):
     ollama_api_key: Optional[str] = None  # empty string clears it
     default_model: Optional[str] = None
     chunk_size: Optional[int] = Field(default=None, ge=1, le=500)
+    # Booleans are stored 0/1 in SQLite; accept bool from the client and coerce.
+    disable_thinking: Optional[bool] = None
+    request_timeout: Optional[int] = Field(default=None, ge=10, le=7200)
+    # 0 = omit num_ctx (use model default). Upper bound is a sanity cap; Ollama
+    # models top out around 128k but nothing stops ballooning it.
+    num_ctx: Optional[int] = Field(default=None, ge=0, le=262144)
 
 
 def _serialize(s: models.Settings) -> dict:
@@ -36,6 +42,13 @@ def _serialize(s: models.Settings) -> dict:
         "ollama_api_key_set": bool(s.ollama_api_key),
         "default_model": s.default_model,
         "chunk_size": s.chunk_size,
+        "disable_thinking": bool(s.disable_thinking),
+        "request_timeout": s.request_timeout,
+        # `num_ctx` is the raw int used in the request (0 means "don't send").
+        # `context_sent` is the derived UI-friendly flag — true when a num_ctx
+        # value will actually be included in the /api/generate payload.
+        "num_ctx": s.num_ctx,
+        "context_sent": bool(s.num_ctx),
     }
 
 
@@ -56,6 +69,9 @@ def update_settings(data: SettingsPatch, db: Session = Depends(get_db)):
     for k, v in payload.items():
         if v is None:
             continue
+        # SQLite Integer column — coerce bool so we store 0/1 consistently.
+        if k == "disable_thinking":
+            v = 1 if v else 0
         setattr(s, k, v)
     db.commit()
     db.refresh(s)

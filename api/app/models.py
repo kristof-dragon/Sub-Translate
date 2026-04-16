@@ -18,6 +18,20 @@ class Settings(Base):
     default_model = Column(String, default="", nullable=False)
     chunk_size = Column(Integer, default=30, nullable=False)
 
+    # 1 = send `"think": false` with /api/generate so reasoning-capable models
+    # (deepseek-r1, qwq, gpt-oss, …) skip the internal monologue. 0 = omit the
+    # field, which is how Ollama's own default behaviour is reached.
+    disable_thinking = Column(Integer, default=0, nullable=False)
+
+    # HTTP timeout applied to the Ollama httpx client. Translation chunks can
+    # take a long time on big local models, hence the 10-min default.
+    request_timeout = Column(Integer, default=600, nullable=False)
+
+    # Optional override of the model's context window (Ollama `options.num_ctx`).
+    # 0 = don't send it; let Ollama pick the model default. Surfaced in the UI
+    # so the operator can see whether a context value is attached to each call.
+    num_ctx = Column(Integer, default=0, nullable=False)
+
 
 class Project(Base):
     __tablename__ = "projects"
