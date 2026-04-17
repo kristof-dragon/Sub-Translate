@@ -152,14 +152,43 @@ export default function ProjectDetail() {
     })
   }
 
-  const exportableCount = useMemo(
+  // Ids of every row that *could* be ticked — i.e. translation done and the
+  // translated file is actually on disk. Used for the master-checkbox state
+  // and for the select-all toggle.
+  const exportableIds = useMemo(
     () =>
-      files.filter(
-        (f) =>
-          selectedIds.has(f.id) && f.status === 'done' && f.translated_available,
-      ).length,
-    [files, selectedIds],
+      files
+        .filter((f) => f.status === 'done' && f.translated_available)
+        .map((f) => f.id),
+    [files],
   )
+
+  const exportableCount = useMemo(
+    () => exportableIds.filter((id) => selectedIds.has(id)).length,
+    [exportableIds, selectedIds],
+  )
+
+  // Tri-state master-checkbox indicator for the file-list header:
+  //   'none'  → nothing selectable is ticked
+  //   'some'  → a subset is ticked (renders as indeterminate)
+  //   'all'   → every exportable row is ticked
+  const masterState: 'none' | 'some' | 'all' = useMemo(() => {
+    if (exportableIds.length === 0) return 'none'
+    if (exportableCount === 0) return 'none'
+    if (exportableCount === exportableIds.length) return 'all'
+    return 'some'
+  }, [exportableCount, exportableIds.length])
+
+  const toggleSelectAll = () => {
+    // Clicking the master toggle in any "partial" state promotes to "all"
+    // (matches how most table UIs behave — one click selects everything);
+    // clicking when everything is already ticked clears the selection.
+    if (masterState === 'all') {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(exportableIds))
+    }
+  }
 
   const mergeResults = (a: ExportResult, b: ExportResult): ExportResult => ({
     written: [...a.written, ...b.written],
@@ -343,9 +372,25 @@ export default function ProjectDetail() {
       ) : (
         <div className="card file-list-card">
           <div className="row between file-list-toolbar">
-            <div className="small muted">
-              Tick files to export. Extracted subtitles go next to the source
-              video; uploaded ones prompt for a folder.
+            <div className="file-list-toolbar-left">
+              {/* Mobile-only select-all — the desktop master checkbox lives
+                  in the hidden-on-mobile .file-list-head row. */}
+              <button
+                type="button"
+                className="small file-list-select-all-mobile"
+                onClick={toggleSelectAll}
+                disabled={exportableIds.length === 0}
+              >
+                {masterState === 'all'
+                  ? 'Clear selection'
+                  : `Select all${
+                      exportableIds.length > 0 ? ` (${exportableIds.length})` : ''
+                    }`}
+              </button>
+              <div className="small muted file-list-toolbar-hint">
+                Tick files to export. Extracted subtitles go next to the
+                source video; uploaded ones prompt for a folder.
+              </div>
             </div>
             <button
               type="button"
@@ -361,8 +406,14 @@ export default function ProjectDetail() {
             </button>
           </div>
           <div className="file-list">
-            <div className="file-list-head" aria-hidden="true">
-              <span />
+            <div className="file-list-head">
+              <div className="file-row-checkbox">
+                <MasterCheckbox
+                  state={masterState}
+                  onToggle={toggleSelectAll}
+                  disabled={exportableIds.length === 0}
+                />
+              </div>
               <span>File</span>
               <span>Status</span>
               <span>Detected</span>
@@ -464,6 +515,38 @@ function ExportSummaryModal({
         )}
       </div>
     </div>
+  )
+}
+
+// Tri-state checkbox for the file-list header. React has no `indeterminate`
+// prop, so we set the DOM property via ref whenever state changes.
+function MasterCheckbox({
+  state,
+  onToggle,
+  disabled,
+}: {
+  state: 'none' | 'some' | 'all'
+  onToggle: () => void
+  disabled?: boolean
+}) {
+  const ref = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = state === 'some'
+  }, [state])
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={state === 'all'}
+      onChange={onToggle}
+      disabled={disabled}
+      aria-label={
+        state === 'all' ? 'Deselect all files' : 'Select all ready files'
+      }
+      title={
+        state === 'all' ? 'Deselect all' : 'Select all ready for export'
+      }
+    />
   )
 }
 

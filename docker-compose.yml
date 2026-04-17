@@ -9,9 +9,10 @@ services:
       - MEDIA_DIR=/media
     volumes:
       - ./data:/data
-      # Host media folder the browser UI lists MKVs from. Read-only:
-      # the api only needs to read MKVs + extract tracks into /data/uploads.
-      - ${MEDIA_PATH:-./media}:/media:ro
+      # Host media folder the browser UI lists MKVs from. Mounted rw so
+      # the bulk-export flow can write translated subtitles next to the
+      # source video (POST /projects/:id/export with target=null).
+      - ${MEDIA_PATH:-./media}:/media
     expose:
       - "8000"
     ports:

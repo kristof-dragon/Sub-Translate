@@ -294,7 +294,19 @@ table.file-list { width: 100%; border-collapse: collapse; }
   flex-wrap: wrap;
   gap: 8px;
 }
-.file-list-toolbar > .small.muted { flex: 1; min-width: 220px; }
+.file-list-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 220px;
+  flex-wrap: wrap;
+}
+.file-list-toolbar-hint { flex: 1; min-width: 180px; }
+
+/* Desktop: the header row has a tri-state master checkbox, so the toolbar
+   button is redundant and hidden. Mobile re-enables it below 700px. */
+.file-list-select-all-mobile { display: none; }
 
 .export-summary-list {
   list-style: none;
@@ -453,6 +465,10 @@ table.file-list { width: 100%; border-collapse: collapse; }
 
   /* Tighter main padding so the cards can breathe. */
   .content { padding: 16px 12px; }
+
+  /* Header row (and its master checkbox) is hidden on mobile, so expose
+     the select-all as a toolbar button instead. */
+  .file-list-select-all-mobile { display: inline-flex; }
 }
 
 .dropzone {
