@@ -89,6 +89,27 @@ npm run dev
 
 ## Changelog
 
+### v1.3.0
+
+- **Rename translated files** — pencil-icon inline editor on each
+  completed row. The `.{target_lang}.{format}` suffix is preserved as
+  a read-only tail so Plex/Jellyfin auto-detection keeps working;
+  `os.replace()` handles the on-disk move atomically.
+- **Bulk export back to the media folder** — tick-box column + "Export
+  selected" button. Subtitles that were extracted from a video go back
+  next to their source automatically; uploaded files prompt once for a
+  destination folder via a new FolderPicker reusing `/api/browse`.
+  Mixed selections dispatch both passes in one click. Skip-existing
+  policy (no overwrite); summary modal reports written vs. skipped.
+- **Mobile-responsive ProjectDetail** — file rows restack as three-tier
+  cards below 700 px, with inline "Detected/Target" labels replacing
+  the hidden column headers.
+- **Slide-in drawer on narrow screens** — the left nav auto-hides below
+  700 px and toggles from a hamburger in the topbar; backdrop click
+  closes it. Desktop layout unchanged.
+- **DB**: additive `source_video_path` column on the File table so
+  extracted subtitles remember their origin for the auto-export pass.
+
 ### v1.2.0
 
 - **Async extraction queue** — `ffmpeg` demux runs on a dedicated worker so
