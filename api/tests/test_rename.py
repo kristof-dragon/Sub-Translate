@@ -30,7 +30,6 @@ def test_strips_surrounding_whitespace():
         ".",              # current dir
         "..",             # parent dir
         "name.",          # trailing dot
-        "name ",          # trailing space
     ],
 )
 def test_rejects_bad_stem(bad):

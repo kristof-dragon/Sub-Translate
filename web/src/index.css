@@ -239,17 +239,31 @@ label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 13px
   transition: width 0.2s ease;
 }
 
-/* File list — grid-based rather than <table> so it can restack into cards
-   below 700px. On desktop each row is a 6-column grid matching the old
-   table columns; the inner .file-row-top / .file-row-meta / .file-row-actions
-   wrappers use `display: contents` so their children participate in the
-   parent grid directly. */
+/* Table styling for the legacy <table class="file-list"> inside VideoBrowser.
+   Targets th/td/tr only, so it doesn't collide with the grid-based rules
+   below that share the .file-list class via a wrapping <div>. */
+table.file-list { width: 100%; border-collapse: collapse; }
+.file-list th, .file-list td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.file-list th { color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; }
+.file-list tr:last-child td { border-bottom: none; }
+
+/* ProjectDetail file list — grid-based rather than <table> so it can restack
+   into cards below 700px. On desktop each row is a 6-column grid matching
+   the old table columns; the inner .file-row-top / .file-row-meta /
+   .file-row-actions wrappers use `display: contents` so their children
+   participate in the parent grid directly. */
 .file-list-card { padding: 0; }
 
 .file-list-head,
 .file-row {
   display: grid;
   grid-template-columns:
+    28px                /* checkbox */
     minmax(0, 2fr)      /* file name */
     110px               /* status badge */
     90px                /* detected */
@@ -259,6 +273,43 @@ label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 13px
   gap: 12px;
   align-items: center;
   padding: 8px 10px;
+}
+
+.file-row-checkbox {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.file-row-checkbox input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  cursor: pointer;
+}
+.file-row-checkbox input[type='checkbox']:disabled { cursor: not-allowed; }
+
+.file-list-toolbar {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.file-list-toolbar > .small.muted { flex: 1; min-width: 220px; }
+
+.export-summary-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.export-summary-list li {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  overflow-wrap: anywhere;
 }
 
 .file-list-head {
@@ -375,6 +426,8 @@ label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 13px
     gap: 12px;
   }
   .file-row-status { flex-shrink: 0; }
+  .file-row-checkbox { flex-shrink: 0; align-self: center; }
+  .file-row-name { flex: 1; }
 
   .file-row-meta {
     display: grid;

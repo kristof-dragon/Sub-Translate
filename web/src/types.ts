@@ -33,6 +33,9 @@ export interface SubtitleFile {
   // Display name of the translated file on disk, with the {id}_ prefix stripped.
   // Empty until translation finishes. User-editable via PATCH /files/:id/rename.
   translated_filename: string
+  // Absolute path (media-root-relative in the UI) of the video the subtitle
+  // was extracted from. "" for drag-and-drop uploads.
+  source_video_path: string
 }
 
 export interface AppSettings {
@@ -93,4 +96,16 @@ export interface OllamaHealth {
   ok: boolean
   model_count?: number
   error?: string
+}
+
+export interface ExportItem {
+  file_id: number
+  name: string
+  path: string // media-root-relative
+  reason?: string // only present on skipped items
+}
+
+export interface ExportResult {
+  written: ExportItem[]
+  skipped: ExportItem[]
 }

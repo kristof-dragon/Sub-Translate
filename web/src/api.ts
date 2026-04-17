@@ -1,6 +1,7 @@
 import type {
   AppSettings,
   BrowseResponse,
+  ExportResult,
   Language,
   OllamaHealth,
   OllamaModel,
@@ -81,6 +82,15 @@ export const api = {
 
   renameFile: (fid: number, stem: string) =>
     request<SubtitleFile>(`/files/${fid}/rename`, jsonInit('PATCH', { stem })),
+
+  exportFiles: (
+    pid: number,
+    body: { file_ids: number[]; target?: string },
+  ) =>
+    request<ExportResult>(
+      `/projects/${pid}/export`,
+      jsonInit('POST', body),
+    ),
 
   getSettings: () => request<AppSettings>('/settings'),
   updateSettings: (data: Partial<AppSettings & { ollama_api_key: string }>) =>

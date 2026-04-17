@@ -40,7 +40,8 @@ def _project_dir(project_id: int) -> Path:
 
 
 def _serialize_file(f: models.File) -> dict:
-    # Same shape as routers/files.py.
+    # Kept in sync with routers/files.py._serialize — if you add a field, add
+    # it here too. (Consolidating the two serializers is on the backlog.)
     return {
         "id": f.id,
         "project_id": f.project_id,
@@ -55,6 +56,8 @@ def _serialize_file(f: models.File) -> dict:
         "created_at": f.created_at.isoformat(),
         "translated_available": bool(f.stored_translated_path)
         and os.path.exists(f.stored_translated_path),
+        "translated_filename": "",
+        "source_video_path": f.source_video_path or "",
     }
 
 
@@ -139,6 +142,9 @@ async def extract_to_project(
             status="extracting",
             progress_pct=0,
             stored_original_path="",
+            # Remember where the source video lives so the export "put back
+            # next to the video" flow can target the same folder later.
+            source_video_path=data.video_path,
         )
         db.add(row)
         db.commit()

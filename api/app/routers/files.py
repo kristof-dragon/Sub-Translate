@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -10,7 +11,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from .. import models
+from .. import models, video
 from ..db import SessionLocal
 from ..worker import job_queue
 
@@ -78,6 +79,10 @@ def _serialize(f: models.File) -> dict:
         "translated_available": bool(f.stored_translated_path)
         and os.path.exists(f.stored_translated_path),
         "translated_filename": _display_translated_name(f),
+        # "" for drag-and-drop uploads, populated for files that came through
+        # the ffmpeg extraction flow. Consumed by the export UI to decide
+        # whether to auto-target the video's folder or prompt for one.
+        "source_video_path": f.source_video_path or "",
     }
 
 
@@ -270,6 +275,10 @@ _FORBIDDEN_IN_STEM = ("/", "\\", "\x00")
 
 
 def _validate_rename_stem(stem: str) -> str:
+    # Surrounding whitespace is treated as a typo and stripped — the UI trims
+    # anyway, and an operator hitting the API by hand shouldn't be punished
+    # for a stray space. Trailing dots are kept rejected though, since some
+    # filesystems (FAT, Windows) disallow them outright.
     cleaned = stem.strip()
     if not cleaned:
         raise HTTPException(400, "Name cannot be empty")
@@ -277,8 +286,8 @@ def _validate_rename_stem(stem: str) -> str:
         raise HTTPException(400, "Name must not contain path separators or null bytes")
     if cleaned in (".", "..") or cleaned.startswith("."):
         raise HTTPException(400, "Name cannot start with a dot")
-    if cleaned.endswith((".", " ")):
-        raise HTTPException(400, "Name cannot end with a dot or space")
+    if cleaned.endswith("."):
+        raise HTTPException(400, "Name cannot end with a dot")
     return cleaned
 
 
@@ -325,6 +334,162 @@ def rename_translated(
     db.commit()
     db.refresh(f)
     return _serialize(f)
+
+
+# ---------------------------------------------------------------------------
+# Export — copy translated files into the bind-mounted media folder.
+# ---------------------------------------------------------------------------
+
+class ExportIn(BaseModel):
+    file_ids: list[int] = Field(min_length=1)
+    # When None every selected file must have a `source_video_path` — the
+    # translation is written alongside its source video. When set, it must
+    # resolve to an existing directory inside the media root and every
+    # translation goes there, regardless of origin.
+    target: Optional[str] = None
+
+
+def _export_filename(row: models.File) -> str:
+    """Output filename for `row` on export — strips the internal `{id}_` prefix.
+
+    The `{id}_` prefix only exists on disk to keep `/data/translated/<pid>/`
+    collision-free when multiple files in the same project share a stem. Out
+    in the media folder there's no such concern, and the prefix would ruin
+    Plex/Jellyfin auto-detection of the matching video.
+    """
+    current_name = Path(row.stored_translated_path).name
+    prefix = f"{row.id}_"
+    return current_name[len(prefix):] if current_name.startswith(prefix) else current_name
+
+
+def _relative_to_media(path: Path) -> str:
+    """Display path for API responses — rooted at MEDIA_DIR, forward slashes."""
+    try:
+        return str(path.relative_to(video.MEDIA_DIR.resolve()))
+    except ValueError:
+        return str(path)
+
+
+@router.post("/projects/{project_id}/export")
+def export_files(
+    project_id: int,
+    data: ExportIn,
+    db: Session = Depends(get_db),
+):
+    """Copy translated files out to the media folder.
+
+    Two modes, selected by the `target` field:
+      - target=null → "put back next to source video". Requires every file
+        to have `source_video_path` set (i.e. originated from the extraction
+        flow). Each translation lands in its video's folder.
+      - target=<media-relative path> → "pick one folder". Every translation
+        lands in that folder, regardless of origin.
+
+    Existing files at the destination are skipped with a `reason="exists"`
+    entry on the response rather than overwritten — callers that want
+    clobber semantics can delete first and retry.
+    """
+    proj = db.get(models.Project, project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+
+    explicit_target: Optional[Path] = None
+    if data.target is not None:
+        try:
+            explicit_target = video.resolve_media_path(data.target)
+        except video.MediaPathError as exc:
+            raise HTTPException(400, f"Target folder: {exc}")
+        if not explicit_target.is_dir():
+            raise HTTPException(400, "Target must be a directory")
+
+    rows = (
+        db.query(models.File)
+        .filter(
+            models.File.project_id == project_id,
+            models.File.id.in_(data.file_ids),
+        )
+        .all()
+    )
+    found_ids = {r.id for r in rows}
+    missing = [fid for fid in data.file_ids if fid not in found_ids]
+    if missing:
+        raise HTTPException(400, f"File IDs not in this project: {missing}")
+
+    written: list[dict] = []
+    skipped: list[dict] = []
+
+    for row in rows:
+        if row.status != "done":
+            skipped.append({
+                "file_id": row.id,
+                "name": row.original_filename,
+                "path": "",
+                "reason": f"status is {row.status}",
+            })
+            continue
+        if not row.stored_translated_path or not os.path.exists(row.stored_translated_path):
+            skipped.append({
+                "file_id": row.id,
+                "name": row.original_filename,
+                "path": "",
+                "reason": "translated file missing on disk",
+            })
+            continue
+
+        # Destination folder: either the picked target, or the source video's folder.
+        if explicit_target is not None:
+            dest_dir = explicit_target
+        elif row.source_video_path:
+            try:
+                video_abs = video.resolve_media_path(row.source_video_path)
+            except video.MediaPathError as exc:
+                skipped.append({
+                    "file_id": row.id,
+                    "name": row.original_filename,
+                    "path": "",
+                    "reason": f"source video: {exc}",
+                })
+                continue
+            dest_dir = video_abs.parent
+        else:
+            skipped.append({
+                "file_id": row.id,
+                "name": row.original_filename,
+                "path": "",
+                "reason": "no source video — pick a target folder",
+            })
+            continue
+
+        out_name = _export_filename(row)
+        dest_path = dest_dir / out_name
+
+        if dest_path.exists():
+            skipped.append({
+                "file_id": row.id,
+                "name": out_name,
+                "path": _relative_to_media(dest_path),
+                "reason": "already exists",
+            })
+            continue
+
+        try:
+            shutil.copy2(row.stored_translated_path, dest_path)
+        except OSError as exc:
+            skipped.append({
+                "file_id": row.id,
+                "name": out_name,
+                "path": _relative_to_media(dest_path),
+                "reason": str(exc),
+            })
+            continue
+
+        written.append({
+            "file_id": row.id,
+            "name": out_name,
+            "path": _relative_to_media(dest_path),
+        })
+
+    return {"written": written, "skipped": skipped}
 
 
 @router.get("/files/{file_id}/download/original")

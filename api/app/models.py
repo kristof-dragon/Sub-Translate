@@ -69,6 +69,10 @@ class File(Base):
     error = Column(Text, default="", nullable=False)
     stored_original_path = Column(String, default="", nullable=False)
     stored_translated_path = Column(String, default="", nullable=False)
+    # Absolute path to the video this subtitle was extracted from, or "" for
+    # drag-and-drop uploads. Used by the "put back next to source video"
+    # export option so we know where to copy the translated file to.
+    source_video_path = Column(String, default="", nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     project = relationship("Project", back_populates="files")

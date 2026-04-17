@@ -44,6 +44,9 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("request_timeout", "INTEGER NOT NULL DEFAULT 600"),
         ("num_ctx", "INTEGER NOT NULL DEFAULT 0"),
     ],
+    "files": [
+        ("source_video_path", "TEXT NOT NULL DEFAULT ''"),
+    ],
 }
 
 
