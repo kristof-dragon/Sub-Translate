@@ -43,6 +43,25 @@ def _project_dir(project_id: int) -> Path:
     return p
 
 
+def _display_translated_name(f: models.File) -> str:
+    """Filename shown in the UI after translation finishes.
+
+    Derived from the on-disk path so the rename flow can simply update
+    `stored_translated_path` and the UI picks up the new name on the next
+    payload — no separate column needed.
+
+    The `{file_id}_` auto-prefix (used for uniqueness inside
+    `/data/translated/<pid>/`) is stripped here purely for display.
+    """
+    if not f.stored_translated_path:
+        return ""
+    name = Path(f.stored_translated_path).name
+    prefix = f"{f.id}_"
+    if name.startswith(prefix):
+        name = name[len(prefix):]
+    return name
+
+
 def _serialize(f: models.File) -> dict:
     return {
         "id": f.id,
@@ -58,6 +77,7 @@ def _serialize(f: models.File) -> dict:
         "created_at": f.created_at.isoformat(),
         "translated_available": bool(f.stored_translated_path)
         and os.path.exists(f.stored_translated_path),
+        "translated_filename": _display_translated_name(f),
     }
 
 
@@ -224,13 +244,87 @@ def download_translated(file_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "File not found")
     if not f.stored_translated_path or not os.path.exists(f.stored_translated_path):
         raise HTTPException(404, "Translated file not ready")
-    stem = Path(f.original_filename).stem
-    download_name = f"{stem}.{f.target_lang}.{f.format}"
+    # Use whatever's on disk (rename edits this) rather than re-deriving from
+    # `original_filename`, so a user-chosen name flows to the download prompt.
+    download_name = _display_translated_name(f) or (
+        f"{Path(f.original_filename).stem}.{f.target_lang}.{f.format}"
+    )
     return FileResponse(
         f.stored_translated_path,
         filename=download_name,
         media_type="application/octet-stream",
     )
+
+
+class RenameIn(BaseModel):
+    # The user-supplied stem. Extension (`.{target_lang}.{format}`) is
+    # preserved automatically — we never let the client change it so the file
+    # stays consistent with what Ollama produced.
+    stem: str = Field(min_length=1, max_length=200)
+
+
+# Characters that would either escape the translated-files directory or create
+# a hidden/unreadable file. Rejected outright rather than silently stripped so
+# the operator sees what's wrong.
+_FORBIDDEN_IN_STEM = ("/", "\\", "\x00")
+
+
+def _validate_rename_stem(stem: str) -> str:
+    cleaned = stem.strip()
+    if not cleaned:
+        raise HTTPException(400, "Name cannot be empty")
+    if any(ch in cleaned for ch in _FORBIDDEN_IN_STEM):
+        raise HTTPException(400, "Name must not contain path separators or null bytes")
+    if cleaned in (".", "..") or cleaned.startswith("."):
+        raise HTTPException(400, "Name cannot start with a dot")
+    if cleaned.endswith((".", " ")):
+        raise HTTPException(400, "Name cannot end with a dot or space")
+    return cleaned
+
+
+@router.patch("/files/{file_id}/rename")
+def rename_translated(
+    file_id: int,
+    data: RenameIn,
+    db: Session = Depends(get_db),
+):
+    """Rename the translated file on disk.
+
+    Only supported once translation has finished — there's no sensible
+    rename semantics for a file that's still being written. The
+    `.{target_lang}.{format}` suffix is preserved so Plex/Jellyfin
+    auto-detection keeps working.
+    """
+    f = db.get(models.File, file_id)
+    if not f:
+        raise HTTPException(404, "File not found")
+    if f.status != "done":
+        raise HTTPException(409, f"Can only rename completed files (status: {f.status})")
+    if not f.stored_translated_path or not os.path.exists(f.stored_translated_path):
+        raise HTTPException(404, "Translated file not on disk")
+
+    new_stem = _validate_rename_stem(data.stem)
+
+    current_path = Path(f.stored_translated_path)
+    # Preserve `.{lang}.{ext}` regardless of what the user typed — if they
+    # included it in the stem we strip it so we don't end up with e.g.
+    # "movie.hu.srt.hu.srt".
+    suffix = f".{f.target_lang}.{f.format}"
+    if new_stem.endswith(suffix):
+        new_stem = new_stem[: -len(suffix)]
+    new_name = f"{new_stem}{suffix}"
+
+    new_path = current_path.with_name(new_name)
+    if new_path == current_path:
+        return _serialize(f)  # no-op
+    if new_path.exists():
+        raise HTTPException(409, f"A file named {new_name!r} already exists here")
+
+    os.replace(current_path, new_path)
+    f.stored_translated_path = str(new_path)
+    db.commit()
+    db.refresh(f)
+    return _serialize(f)
 
 
 @router.get("/files/{file_id}/download/original")

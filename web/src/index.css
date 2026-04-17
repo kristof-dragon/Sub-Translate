@@ -281,6 +281,57 @@ label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 13px
 .file-row-meta { display: contents; }
 
 .file-row-name { min-width: 0; overflow-wrap: anywhere; }
+.file-row-name-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.file-row-name-line > span { min-width: 0; overflow-wrap: anywhere; }
+
+/* Inline rename editor — sits in the same cell the filename normally occupies. */
+.file-row-rename { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.file-row-rename-input {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.file-row-rename-input input {
+  border: none;
+  background: transparent;
+  border-radius: 0;
+  padding: 6px 10px;
+  flex: 1;
+  min-width: 0;
+}
+.file-row-rename-input input:focus {
+  outline: none;
+  background: var(--bg);
+}
+.file-row-rename-suffix {
+  color: var(--muted);
+  padding: 6px 10px;
+  border-left: 1px solid var(--border);
+  font-size: 13px;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+}
+
+.icon-button {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+.icon-button:hover { background: var(--surface-2); color: var(--text); }
 .file-row-actions {
   display: flex;
   gap: 8px;

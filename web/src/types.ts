@@ -30,6 +30,9 @@ export interface SubtitleFile {
   error: string
   created_at: string
   translated_available: boolean
+  // Display name of the translated file on disk, with the {id}_ prefix stripped.
+  // Empty until translation finishes. User-editable via PATCH /files/:id/rename.
+  translated_filename: string
 }
 
 export interface AppSettings {

@@ -79,6 +79,9 @@ export const api = {
     body: { target_lang: string; model?: string },
   ) => request<SubtitleFile>(`/files/${fid}/translate`, jsonInit('POST', body)),
 
+  renameFile: (fid: number, stem: string) =>
+    request<SubtitleFile>(`/files/${fid}/rename`, jsonInit('PATCH', { stem })),
+
   getSettings: () => request<AppSettings>('/settings'),
   updateSettings: (data: Partial<AppSettings & { ollama_api_key: string }>) =>
     request<AppSettings>('/settings', jsonInit('PUT', data)),

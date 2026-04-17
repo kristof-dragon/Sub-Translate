@@ -116,6 +116,11 @@ export default function ProjectDetail() {
     setFiles((rows) => rows.filter((r) => r.id !== fid))
   }
 
+  const handleRename = async (fid: number, stem: string) => {
+    const updated = await api.renameFile(fid, stem)
+    setFiles((rows) => rows.map((r) => (r.id === fid ? updated : r)))
+  }
+
   const handleTranslate = async (fid: number) => {
     if (!targetLang) {
       setErr('Pick a target language at the top of the page first')
@@ -223,6 +228,7 @@ export default function ProjectDetail() {
                 f={f}
                 onDelete={handleDelete}
                 onTranslate={handleTranslate}
+                onRename={handleRename}
               />
             ))}
           </div>
@@ -236,10 +242,12 @@ function FileRow({
   f,
   onDelete,
   onTranslate,
+  onRename,
 }: {
   f: SubtitleFile
   onDelete: (id: number) => void
   onTranslate: (id: number) => void
+  onRename: (id: number, stem: string) => Promise<void>
 }) {
   const barRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -250,6 +258,55 @@ function FileRow({
   // covers first-run (extracted), retry (error), and re-translate (done).
   const canTranslate = ['extracted', 'done', 'error'].includes(f.status)
 
+  // `.{target_lang}.{format}` is the suffix the server preserves on rename —
+  // we show it as a read-only tail next to the input so the operator knows
+  // which part of the filename they can actually change.
+  const suffix = `.${f.target_lang}.${f.format}`
+  const displayName = f.translated_filename || f.original_filename
+  const currentStem = f.translated_filename.endsWith(suffix)
+    ? f.translated_filename.slice(0, -suffix.length)
+    : displayName
+
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(currentStem)
+  const [saving, setSaving] = useState(false)
+  const [renameErr, setRenameErr] = useState('')
+
+  const canRename = f.status === 'done' && !!f.translated_filename
+
+  const startEditing = () => {
+    setDraft(currentStem)
+    setRenameErr('')
+    setEditing(true)
+  }
+
+  const cancelEditing = () => {
+    setEditing(false)
+    setRenameErr('')
+  }
+
+  const saveRename = async () => {
+    const trimmed = draft.trim()
+    if (!trimmed) {
+      setRenameErr('Name cannot be empty')
+      return
+    }
+    if (trimmed === currentStem) {
+      cancelEditing()
+      return
+    }
+    setSaving(true)
+    setRenameErr('')
+    try {
+      await onRename(f.id, trimmed)
+      setEditing(false)
+    } catch (e: unknown) {
+      setRenameErr(String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
   // The DOM is grouped into .file-row-top / .file-row-meta / .file-row-actions
   // so that narrow screens can stack into three readable rows. On desktop
   // those wrappers use `display: contents` (see index.css) so their children
@@ -259,7 +316,60 @@ function FileRow({
     <div className="file-row">
       <div className="file-row-top">
         <div className="file-row-name">
-          <div>{f.original_filename}</div>
+          {editing ? (
+            <div className="file-row-rename">
+              <div className="file-row-rename-input">
+                <input
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void saveRename()
+                    if (e.key === 'Escape') cancelEditing()
+                  }}
+                  autoFocus
+                  disabled={saving}
+                  aria-label="New filename (without extension)"
+                />
+                <span className="file-row-rename-suffix">{suffix}</span>
+              </div>
+              <div className="row" style={{ gap: 6 }}>
+                <button
+                  type="button"
+                  className="small primary"
+                  onClick={saveRename}
+                  disabled={saving}
+                >
+                  {saving ? 'Saving…' : 'Save'}
+                </button>
+                <button
+                  type="button"
+                  className="small"
+                  onClick={cancelEditing}
+                  disabled={saving}
+                >
+                  Cancel
+                </button>
+              </div>
+              {renameErr && (
+                <div className="small" style={{ color: 'var(--error)' }}>{renameErr}</div>
+              )}
+            </div>
+          ) : (
+            <div className="file-row-name-line">
+              <span>{displayName}</span>
+              {canRename && (
+                <button
+                  type="button"
+                  className="icon-button"
+                  onClick={startEditing}
+                  title="Rename translated file"
+                  aria-label="Rename translated file"
+                >
+                  &#9998;
+                </button>
+              )}
+            </div>
+          )}
           {f.error && (
             <div className="small" style={{ color: 'var(--error)' }}>{f.error}</div>
           )}
