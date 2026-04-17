@@ -65,9 +65,17 @@ ffprobe `codec_name` — handled across MKV, MP4, WebM, MOV, AVI, TS, …
 | `webvtt`            | VTT    | ✓       | ✓         |
 | `mov_text`          | SRT    | ✓ (transmux) | ✓     |
 | `ass` / `ssa`       | ASS    | shown   | not yet   |
-| `hdmv_pgs_subtitle` | PGS    | shown   | no (bitmap) |
+| `hdmv_pgs_subtitle` | PGS    | ✓ (OCR) | ✓         |
 | `dvd_subtitle`      | VobSub | shown   | no (bitmap) |
 | `dvb_subtitle`      | DVB    | shown   | no (bitmap) |
+
+PGS (Blu-ray bitmap subtitles) are demuxed as `.sup`, run through
+tesseract via [pgsrip](https://github.com/ratoaq2/pgsrip), and the
+recovered SRT is fed back into the normal translate pipeline. An
+optional per-cue Ollama "OCR cleanup" pass can be enabled in Settings
+to fix common OCR mistakes before translation. VobSub and DVB still
+extract to disk for archival, but in-app translation is deferred to a
+future release.
 
 ## Development
 
@@ -88,6 +96,33 @@ npm run dev
 ```
 
 ## Changelog
+
+### v1.4.0
+
+- **PGS OCR** — Blu-ray PGS bitmap subtitle tracks now extract, OCR, and
+  translate end-to-end. Extraction lands the row at `ocr_queued`; a new
+  CPU-bound worker picks it up, runs pgsrip (tesseract under the hood),
+  writes the recovered SRT, and lands at `ocr_done` for the operator to
+  click **Translate**. A `Retry OCR` button is offered on `ocr_error`
+  rows.
+- **Optional OCR cleanup pass** — Settings exposes a toggle plus a
+  separate cleanup-model dropdown. When on, each OCRed cue is sent
+  through Ollama once with a "fix OCR errors, don't translate" prompt
+  before translation. A small fast model (e.g. `llama3.2:3b`) is
+  usually enough — translation can use a larger one independently.
+- **OCR progress bar** — independent `ocr_progress_pct` counter so the
+  OCR phase has visible progress without overwriting the translation
+  bar later in the pipeline.
+- **Container**: `tesseract-ocr` plus 13 bundled language packs (eng,
+  hun, spa, fra, deu, ita, por, rus, jpn, kor, chi-sim, chi-tra, ara)
+  + `imagemagick` baked into the API image. `pgsrip==0.1.12` added to
+  `requirements.txt`.
+- **DB**: additive `source_format` and `ocr_progress_pct` columns on
+  the File table; `ocr_llm_cleanup` and `ocr_llm_model` on Settings.
+  Existing deployments pick these up automatically on startup.
+
+VobSub and DVB are still deferred — they need bespoke per-frame
+rendering work that no maintained Python library currently provides.
 
 ### v1.3.1
 
