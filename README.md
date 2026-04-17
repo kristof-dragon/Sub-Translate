@@ -89,6 +89,17 @@ npm run dev
 
 ## Changelog
 
+### v1.3.1
+
+- **Fix**: drop the `:ro` flag on the media bind mount in
+  `docker-compose.yml`. v1.3.0's bulk export silently failed to write
+  subtitles next to source videos because the container couldn't
+  write to `/media`. Re-deploying (`docker compose up -d`) picks up
+  the new mount.
+- **Select-all / deselect-all** in the project file list: tri-state
+  master checkbox in the header on desktop, labeled toolbar button
+  on mobile (header is hidden under 700 px).
+
 ### v1.3.0
 
 - **Rename translated files** — pencil-icon inline editor on each
