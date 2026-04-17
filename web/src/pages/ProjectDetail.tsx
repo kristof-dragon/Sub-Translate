@@ -207,29 +207,25 @@ export default function ProjectDetail() {
       {files.length === 0 ? (
         <div className="empty">No files uploaded yet.</div>
       ) : (
-        <div className="card">
-          <table className="file-list">
-            <thead>
-              <tr>
-                <th>File</th>
-                <th>Status</th>
-                <th>Detected</th>
-                <th>Target</th>
-                <th>Progress</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {files.map((f) => (
-                <FileRow
-                  key={f.id}
-                  f={f}
-                  onDelete={handleDelete}
-                  onTranslate={handleTranslate}
-                />
-              ))}
-            </tbody>
-          </table>
+        <div className="card file-list-card">
+          <div className="file-list">
+            <div className="file-list-head" aria-hidden="true">
+              <span>File</span>
+              <span>Status</span>
+              <span>Detected</span>
+              <span>Target</span>
+              <span>Progress</span>
+              <span />
+            </div>
+            {files.map((f) => (
+              <FileRow
+                key={f.id}
+                f={f}
+                onDelete={handleDelete}
+                onTranslate={handleTranslate}
+              />
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -254,25 +250,43 @@ function FileRow({
   // covers first-run (extracted), retry (error), and re-translate (done).
   const canTranslate = ['extracted', 'done', 'error'].includes(f.status)
 
+  // The DOM is grouped into .file-row-top / .file-row-meta / .file-row-actions
+  // so that narrow screens can stack into three readable rows. On desktop
+  // those wrappers use `display: contents` (see index.css) so their children
+  // participate directly in the parent grid and the layout matches the old
+  // table column-for-column.
   return (
-    <tr>
-      <td>
-        <div>{f.original_filename}</div>
-        {f.error && <div className="small" style={{ color: 'var(--error)' }}>{f.error}</div>}
-      </td>
-      <td><span className={`badge ${f.status}`}>{f.status}</span></td>
-      <td className="small muted">{f.detected_lang || '—'}</td>
-      <td className="small">{f.target_lang || '—'}</td>
-      <td style={{ minWidth: 160 }}>
-        <div className="progress"><div ref={barRef} /></div>
-        <div className="small muted">{f.progress_pct}%</div>
-      </td>
-      <td style={{ whiteSpace: 'nowrap' }}>
+    <div className="file-row">
+      <div className="file-row-top">
+        <div className="file-row-name">
+          <div>{f.original_filename}</div>
+          {f.error && (
+            <div className="small" style={{ color: 'var(--error)' }}>{f.error}</div>
+          )}
+        </div>
+        <div className="file-row-status">
+          <span className={`badge ${f.status}`}>{f.status}</span>
+        </div>
+      </div>
+
+      <div className="file-row-meta">
+        <div className="file-row-detected small muted">
+          <span className="file-row-label">Detected:</span> {f.detected_lang || '—'}
+        </div>
+        <div className="file-row-target small">
+          <span className="file-row-label">Target:</span> {f.target_lang || '—'}
+        </div>
+        <div className="file-row-progress">
+          <div className="progress"><div ref={barRef} /></div>
+          <div className="small muted">{f.progress_pct}%</div>
+        </div>
+      </div>
+
+      <div className="file-row-actions">
         {canTranslate && (
           <button
             className="small"
             onClick={() => onTranslate(f.id)}
-            style={{ marginRight: 8 }}
             title="Queue this file for translation using the target language selected at the top of the page"
           >
             Translate
@@ -282,14 +296,13 @@ function FileRow({
           <a
             href={api.downloadUrl(f.id)}
             download
-            className="small"
-            style={{ marginRight: 8 }}
+            className="small button-like"
           >
             Download
           </a>
         )}
         <button className="danger small" onClick={() => onDelete(f.id)}>Delete</button>
-      </td>
-    </tr>
+      </div>
+    </div>
   )
 }

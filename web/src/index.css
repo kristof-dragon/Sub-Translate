@@ -239,15 +239,117 @@ label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 13px
   transition: width 0.2s ease;
 }
 
-.file-list { width: 100%; border-collapse: collapse; }
-.file-list th, .file-list td {
-  text-align: left;
+/* File list — grid-based rather than <table> so it can restack into cards
+   below 700px. On desktop each row is a 6-column grid matching the old
+   table columns; the inner .file-row-top / .file-row-meta / .file-row-actions
+   wrappers use `display: contents` so their children participate in the
+   parent grid directly. */
+.file-list-card { padding: 0; }
+
+.file-list-head,
+.file-row {
+  display: grid;
+  grid-template-columns:
+    minmax(0, 2fr)      /* file name */
+    110px               /* status badge */
+    90px                /* detected */
+    90px                /* target */
+    minmax(140px, 1fr)  /* progress */
+    auto;               /* actions */
+  gap: 12px;
+  align-items: center;
   padding: 8px 10px;
+}
+
+.file-list-head {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border);
+}
+
+.file-row {
   border-bottom: 1px solid var(--border);
   font-size: 13px;
 }
-.file-list th { color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; }
-.file-list tr:last-child td { border-bottom: none; }
+.file-row:last-child { border-bottom: none; }
+
+/* Flatten the semantic wrappers into the parent grid on desktop. */
+.file-row-top,
+.file-row-meta { display: contents; }
+
+.file-row-name { min-width: 0; overflow-wrap: anywhere; }
+.file-row-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  white-space: nowrap;
+}
+
+/* `.file-row-label` is only shown in card mode — hidden on desktop where the
+   column headers already label the content. */
+.file-row-label { display: none; }
+
+/* A <a> styled to look like a small button so Download sits flush with the
+   Translate / Delete buttons on both desktop and mobile. */
+.button-like {
+  display: inline-flex;
+  align-items: center;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 12px;
+  color: var(--text);
+}
+.button-like:hover { background: #262b36; color: var(--text); }
+
+/* ---- Mobile: below 700px, file rows collapse into three-tier cards ---- */
+@media (max-width: 700px) {
+  .file-list-head { display: none; }
+
+  .file-row {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px 12px;
+  }
+
+  .file-row-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .file-row-status { flex-shrink: 0; }
+
+  .file-row-meta {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 12px;
+    align-items: center;
+  }
+  .file-row-progress { grid-column: 1 / -1; }
+
+  .file-row-label {
+    display: inline;
+    color: var(--muted);
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.5px;
+    margin-right: 4px;
+  }
+
+  .file-row-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  /* Tighter main padding so the cards can breathe. */
+  .content { padding: 16px 12px; }
+}
 
 .dropzone {
   border: 2px dashed var(--border);
