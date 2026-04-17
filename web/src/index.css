@@ -224,6 +224,10 @@ label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 13px
 .badge.translating { color: var(--accent); border-color: var(--accent); }
 .badge.done { color: var(--success); border-color: var(--success); }
 .badge.error { color: var(--error); border-color: var(--error); }
+.badge.ocr_queued { color: var(--muted); border-color: var(--border); }
+.badge.ocr_running { color: var(--accent); border-color: var(--accent); }
+.badge.ocr_done { color: var(--muted); border-color: var(--border); }
+.badge.ocr_error { color: var(--error); border-color: var(--error); }
 
 .progress {
   position: relative;

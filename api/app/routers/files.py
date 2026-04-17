@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from .. import models, video
 from ..db import SessionLocal
-from ..worker import job_queue
+from ..worker import job_queue, ocr_queue
 
 router = APIRouter(tags=["files"])
 
@@ -83,6 +83,13 @@ def _serialize(f: models.File) -> dict:
         # the ffmpeg extraction flow. Consumed by the export UI to decide
         # whether to auto-target the video's folder or prompt for one.
         "source_video_path": f.source_video_path or "",
+        # "pgs" for files that went through OCR, "" for files that arrived
+        # as text. Lets the UI label OCR-origin rows.
+        "source_format": f.source_format or "",
+        # Independent progress counter for the OCR phase (0–100). Distinct
+        # from `progress_pct` (translation progress) so both phases can
+        # render without overwriting each other.
+        "ocr_progress_pct": f.ocr_progress_pct or 0,
     }
 
 
@@ -200,16 +207,25 @@ async def translate_file(
 ):
     """(Re)queue a file for translation.
 
-    Works for files in `extracted`, `done`, or `error` status — typical use is
-    "I just demuxed a subtitle from an MKV, now translate it" or "the previous
-    run failed, try again". Files currently mid-flight (queued/detecting/
-    translating) are rejected so we don't double-queue the same job.
+    Works for files in `extracted`, `ocr_done`, `done`, or `error` status —
+    typical use is "I just demuxed a subtitle from an MKV, now translate it",
+    "OCR finished and I've reviewed the output, translate it now", or "the
+    previous run failed, try again". Files currently mid-flight
+    (queued/detecting/translating, or anywhere in the OCR pipeline) are
+    rejected so we don't double-queue the same job.
     """
     f = db.get(models.File, file_id)
     if not f:
         raise HTTPException(404, "File not found")
-    if f.status in ("queued", "detecting", "translating"):
+    if f.status in ("queued", "detecting", "translating", "ocr_queued", "ocr_running"):
         raise HTTPException(409, f"File is already {f.status}")
+    # OCR-origin rows must finish OCR (or be retried) before they can be
+    # translated — the on-disk file is still a .sup until OCR runs.
+    if f.format not in ("srt", "vtt"):
+        raise HTTPException(
+            409,
+            f"File format is {f.format!r} — finish OCR first via /files/{f.id}/ocr",
+        )
     if not f.stored_original_path or not os.path.exists(f.stored_original_path):
         raise HTTPException(400, "Original file is missing on disk")
 
@@ -239,6 +255,35 @@ async def translate_file(
     db.refresh(f)
 
     await job_queue.put(f.id)
+    return _serialize(f)
+
+
+@router.post("/files/{file_id}/ocr", status_code=202)
+async def retry_ocr(file_id: int, db: Session = Depends(get_db)):
+    """Re-queue a failed PGS OCR job.
+
+    Only valid for rows that originated from the bitmap-extraction flow
+    (`source_format == "pgs"`) and ended up at `ocr_error`. The on-disk
+    `.sup` is still where extraction wrote it, so we just reset the
+    progress fields and push the file id back onto `ocr_queue`.
+    """
+    f = db.get(models.File, file_id)
+    if not f:
+        raise HTTPException(404, "File not found")
+    if (f.source_format or "") != "pgs":
+        raise HTTPException(409, "OCR retry only applies to PGS-origin files")
+    if f.status != "ocr_error":
+        raise HTTPException(409, f"Cannot retry OCR from status {f.status!r}")
+    if not f.stored_original_path or not os.path.exists(f.stored_original_path):
+        raise HTTPException(400, "Source .sup file is missing on disk")
+
+    f.status = "ocr_queued"
+    f.ocr_progress_pct = 0
+    f.error = ""
+    db.commit()
+    db.refresh(f)
+
+    await ocr_queue.put(f.id)
     return _serialize(f)
 
 

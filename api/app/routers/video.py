@@ -58,6 +58,8 @@ def _serialize_file(f: models.File) -> dict:
         and os.path.exists(f.stored_translated_path),
         "translated_filename": "",
         "source_video_path": f.source_video_path or "",
+        "source_format": f.source_format or "",
+        "ocr_progress_pct": f.ocr_progress_pct or 0,
     }
 
 
@@ -145,6 +147,10 @@ async def extract_to_project(
             # Remember where the source video lives so the export "put back
             # next to the video" flow can target the same folder later.
             source_video_path=data.video_path,
+            # Bitmap codecs (PGS) carry their codec hint forward so the
+            # extraction worker knows to enqueue OCR rather than landing
+            # the row at "extracted". Empty string for text codecs.
+            source_format=video.source_format_for(track.codec),
         )
         db.add(row)
         db.commit()

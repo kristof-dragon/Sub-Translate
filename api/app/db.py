@@ -43,9 +43,13 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("disable_thinking", "INTEGER NOT NULL DEFAULT 0"),
         ("request_timeout", "INTEGER NOT NULL DEFAULT 600"),
         ("num_ctx", "INTEGER NOT NULL DEFAULT 0"),
+        ("ocr_llm_cleanup", "INTEGER NOT NULL DEFAULT 0"),
+        ("ocr_llm_model", "TEXT NOT NULL DEFAULT ''"),
     ],
     "files": [
         ("source_video_path", "TEXT NOT NULL DEFAULT ''"),
+        ("source_format", "TEXT NOT NULL DEFAULT ''"),
+        ("ocr_progress_pct", "INTEGER NOT NULL DEFAULT 0"),
     ],
 }
 

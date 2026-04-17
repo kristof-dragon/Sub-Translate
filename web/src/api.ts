@@ -80,6 +80,9 @@ export const api = {
     body: { target_lang: string; model?: string },
   ) => request<SubtitleFile>(`/files/${fid}/translate`, jsonInit('POST', body)),
 
+  retryOcr: (fid: number) =>
+    request<SubtitleFile>(`/files/${fid}/ocr`, { method: 'POST' }),
+
   renameFile: (fid: number, stem: string) =>
     request<SubtitleFile>(`/files/${fid}/rename`, jsonInit('PATCH', { stem })),
 

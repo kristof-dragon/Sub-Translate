@@ -11,6 +11,8 @@ export default function Settings() {
   const [disableThinking, setDisableThinking] = useState(false)
   const [requestTimeout, setRequestTimeout] = useState(600)
   const [numCtx, setNumCtx] = useState(0)
+  const [ocrLlmCleanup, setOcrLlmCleanup] = useState(false)
+  const [ocrLlmModel, setOcrLlmModel] = useState('')
   const [models, setModels] = useState<OllamaModel[]>([])
   const [err, setErr] = useState('')
   const [msg, setMsg] = useState('')
@@ -25,6 +27,8 @@ export default function Settings() {
       setDisableThinking(s.disable_thinking)
       setRequestTimeout(s.request_timeout)
       setNumCtx(s.num_ctx)
+      setOcrLlmCleanup(s.ocr_llm_cleanup)
+      setOcrLlmModel(s.ocr_llm_model)
       if (s.ollama_url) void refreshModels()
     }).catch((e) => setErr(String(e)))
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -57,6 +61,8 @@ export default function Settings() {
         disable_thinking: disableThinking,
         request_timeout: requestTimeout,
         num_ctx: numCtx,
+        ocr_llm_cleanup: ocrLlmCleanup,
+        ocr_llm_model: ocrLlmModel,
       }
       if (apiKey) payload.ollama_api_key = apiKey
       const updated = await api.updateSettings(payload)
@@ -194,6 +200,46 @@ export default function Settings() {
           <div className="small muted" style={{ marginTop: 4 }}>
             Skips the chain-of-thought prelude on thinking-capable models
             (deepseek-r1, qwq, gpt-oss, …). Has no effect on other models.
+          </div>
+        </div>
+
+        <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, margin: 0 }}>
+            <input
+              type="checkbox"
+              checked={ocrLlmCleanup}
+              onChange={(e) => setOcrLlmCleanup(e.target.checked)}
+              style={{ width: 'auto' }}
+            />
+            <span>OCR cleanup pass for PGS subtitles</span>
+          </label>
+          <div className="small muted" style={{ marginTop: 4 }}>
+            After tesseract OCRs a Blu-ray PGS bitmap subtitle, run each cue
+            through Ollama once to fix common OCR mistakes (l/I/1 confusion,
+            broken diacritics, stray punctuation) before translation. Adds
+            one LLM call per cue.
+          </div>
+        </div>
+
+        <div>
+          <label>OCR cleanup model</label>
+          <select
+            value={ocrLlmModel}
+            onChange={(e) => setOcrLlmModel(e.target.value)}
+            disabled={!ocrLlmCleanup}
+          >
+            <option value="">(use default model)</option>
+            {models.map((m) => (
+              <option key={m.name} value={m.name}>{m.name}</option>
+            ))}
+            {ocrLlmModel && !models.find((m) => m.name === ocrLlmModel) && (
+              <option value={ocrLlmModel}>{ocrLlmModel} (offline)</option>
+            )}
+          </select>
+          <div className="small muted">
+            A small fast model (e.g. llama3.2:3b) usually does fine here —
+            cleanup is one short cue at a time. Leave blank to reuse the
+            default model.
           </div>
         </div>
 

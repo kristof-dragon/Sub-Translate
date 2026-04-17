@@ -29,9 +29,21 @@ def test_codec_map_ass_is_detected_but_unsupported():
     assert (ext, supported) == ("ass", False)
 
 
-def test_codec_map_pgs_is_detected_but_unsupported():
+def test_codec_map_pgs_is_supported_via_ocr():
+    # v1.4.0 routes PGS through pgsrip OCR after extraction, so the
+    # codec is now flagged supported even though it's a bitmap format.
     ext, supported, _ = CODEC_MAP["hdmv_pgs_subtitle"]
-    assert (ext, supported) == ("sup", False)
+    assert (ext, supported) == ("sup", True)
+
+
+def test_source_format_for_pgs_returns_pgs():
+    assert video.source_format_for("hdmv_pgs_subtitle") == "pgs"
+
+
+def test_source_format_for_text_codecs_is_empty():
+    assert video.source_format_for("subrip") == ""
+    assert video.source_format_for("webvtt") == ""
+    assert video.source_format_for("mov_text") == ""
 
 
 def test_track_from_json_extracts_all_fields():
@@ -54,15 +66,25 @@ def test_track_from_json_extracts_all_fields():
     assert t.supported is True
 
 
-def test_track_from_json_unknown_codec_is_unsupported():
+def test_track_from_json_pgs_is_supported_via_ocr():
     payload = {
         "index": 0,
         "codec_name": "hdmv_pgs_subtitle",
         "tags": {"language": "eng"},
     }
     t = _track_from_json(payload)
-    assert t.supported is False
+    assert t.supported is True
     assert t.ext == "sup"
+
+
+def test_track_from_json_unknown_codec_is_unsupported():
+    payload = {
+        "index": 0,
+        "codec_name": "dvb_subtitle",
+        "tags": {"language": "eng"},
+    }
+    t = _track_from_json(payload)
+    assert t.supported is False
 
 
 @pytest.fixture

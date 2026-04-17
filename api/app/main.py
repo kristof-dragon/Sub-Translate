@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import models
 from .db import SessionLocal, init_db
 from .routers import files, jobs, projects, settings, video
-from .worker import extraction_worker_loop, worker_loop
+from .worker import extraction_worker_loop, ocr_worker_loop, worker_loop
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("app")
@@ -21,20 +21,26 @@ log = logging.getLogger("app")
 async def lifespan(app: FastAPI):
     init_db()
 
-    # Anything left mid-flight from a prior run is marked errored — both queues
-    # are in-memory, so those jobs would otherwise hang forever in the UI.
+    # Anything left mid-flight from a prior run is marked errored — all three
+    # queues are in-memory, so those jobs would otherwise hang forever in the UI.
+    # OCR-running rows go back to ocr_error so the operator can re-queue them
+    # via the dedicated retry endpoint rather than losing the .sup association.
     with SessionLocal() as db:
         stale = (
             db.query(models.File)
             .filter(
                 models.File.status.in_(
-                    ("extracting", "queued", "detecting", "translating")
+                    ("extracting", "queued", "detecting", "translating",
+                     "ocr_queued", "ocr_running")
                 )
             )
             .all()
         )
         for row in stale:
-            row.status = "error"
+            if row.status in ("ocr_queued", "ocr_running"):
+                row.status = "ocr_error"
+            else:
+                row.status = "error"
             row.error = "Interrupted by server restart"
         if stale:
             db.commit()
@@ -42,19 +48,20 @@ async def lifespan(app: FastAPI):
 
     translate_task = asyncio.create_task(worker_loop(), name="translate-worker")
     extract_task = asyncio.create_task(extraction_worker_loop(), name="extract-worker")
+    ocr_task = asyncio.create_task(ocr_worker_loop(), name="ocr-worker")
     try:
         yield
     finally:
-        for t in (translate_task, extract_task):
+        for t in (translate_task, extract_task, ocr_task):
             t.cancel()
-        for t in (translate_task, extract_task):
+        for t in (translate_task, extract_task, ocr_task):
             try:
                 await t
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
 
 
-app = FastAPI(title="Subtitle Translator API", version="1.3.1", lifespan=lifespan)
+app = FastAPI(title="Subtitle Translator API", version="1.4.0", lifespan=lifespan)
 
 # Permissive CORS — the app is internal-only and served behind the web container's nginx.
 app.add_middleware(

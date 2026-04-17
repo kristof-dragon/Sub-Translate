@@ -87,8 +87,13 @@ export default function ProjectDetail() {
               status: data.status ?? r.status,
               progress_pct:
                 data.progress_pct !== undefined ? data.progress_pct : r.progress_pct,
+              ocr_progress_pct:
+                data.ocr_progress_pct !== undefined
+                  ? data.ocr_progress_pct
+                  : r.ocr_progress_pct,
               detected_lang: data.detected_lang ?? r.detected_lang,
               error: data.error ?? r.error,
+              format: data.format ?? r.format,
             }
             if (data.status === 'done') {
               next.translated_available = true
@@ -279,6 +284,16 @@ export default function ProjectDetail() {
     }
   }
 
+  const handleRetryOcr = async (fid: number) => {
+    setErr('')
+    try {
+      const updated = await api.retryOcr(fid)
+      setFiles((rows) => rows.map((r) => (r.id === fid ? updated : r)))
+    } catch (e: unknown) {
+      setErr(String(e))
+    }
+  }
+
   const handleTranslate = async (fid: number) => {
     if (!targetLang) {
       setErr('Pick a target language at the top of the page first')
@@ -429,6 +444,7 @@ export default function ProjectDetail() {
                 onToggleSelected={toggleSelected}
                 onDelete={handleDelete}
                 onTranslate={handleTranslate}
+                onRetryOcr={handleRetryOcr}
                 onRename={handleRename}
               />
             ))}
@@ -556,6 +572,7 @@ function FileRow({
   onToggleSelected,
   onDelete,
   onTranslate,
+  onRetryOcr,
   onRename,
 }: {
   f: SubtitleFile
@@ -563,16 +580,23 @@ function FileRow({
   onToggleSelected: (id: number) => void
   onDelete: (id: number) => void
   onTranslate: (id: number) => void
+  onRetryOcr: (id: number) => void
   onRename: (id: number, stem: string) => Promise<void>
 }) {
   const barRef = useRef<HTMLDivElement>(null)
+  // While the row is in the OCR pipeline the "progress" we want to show is
+  // the OCR pass (0–100); once it lands at ocr_done / queued / translating /
+  // done the translation progress takes over again.
+  const ocrPhase = ['ocr_queued', 'ocr_running', 'ocr_error'].includes(f.status)
+  const shownPct = ocrPhase ? f.ocr_progress_pct : f.progress_pct
   useEffect(() => {
-    if (barRef.current) barRef.current.style.width = `${f.progress_pct}%`
-  }, [f.progress_pct])
+    if (barRef.current) barRef.current.style.width = `${shownPct}%`
+  }, [shownPct])
 
   // Translate button is offered on any row that isn't currently mid-flight —
-  // covers first-run (extracted), retry (error), and re-translate (done).
-  const canTranslate = ['extracted', 'done', 'error'].includes(f.status)
+  // covers first-run (extracted/ocr_done), retry (error), and re-translate (done).
+  const canTranslate = ['extracted', 'ocr_done', 'done', 'error'].includes(f.status)
+  const canRetryOcr = f.status === 'ocr_error'
 
   // `.{target_lang}.{format}` is the suffix the server preserves on rename —
   // we show it as a read-only tail next to the input so the operator knows
@@ -723,7 +747,9 @@ function FileRow({
         </div>
         <div className="file-row-progress">
           <div className="progress"><div ref={barRef} /></div>
-          <div className="small muted">{f.progress_pct}%</div>
+          <div className="small muted">
+            {ocrPhase ? `OCR ${shownPct}%` : `${shownPct}%`}
+          </div>
         </div>
       </div>
 
@@ -735,6 +761,15 @@ function FileRow({
             title="Queue this file for translation using the target language selected at the top of the page"
           >
             Translate
+          </button>
+        )}
+        {canRetryOcr && (
+          <button
+            className="small"
+            onClick={() => onRetryOcr(f.id)}
+            title="Re-run OCR on the extracted PGS file"
+          >
+            Retry OCR
           </button>
         )}
         {f.translated_available && (

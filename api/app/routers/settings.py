@@ -34,6 +34,12 @@ class SettingsPatch(BaseModel):
     # 0 = omit num_ctx (use model default). Upper bound is a sanity cap; Ollama
     # models top out around 128k but nothing stops ballooning it.
     num_ctx: Optional[int] = Field(default=None, ge=0, le=262144)
+    # OCR cleanup pass: when enabled, each cue from pgsrip is sent through
+    # Ollama to fix common OCR errors before translation. ocr_llm_model lets
+    # the operator pick a smaller/faster model for cleanup than translation —
+    # empty string means "fall back to default_model".
+    ocr_llm_cleanup: Optional[bool] = None
+    ocr_llm_model: Optional[str] = None
 
 
 def _serialize(s: models.Settings) -> dict:
@@ -49,6 +55,8 @@ def _serialize(s: models.Settings) -> dict:
         # value will actually be included in the /api/generate payload.
         "num_ctx": s.num_ctx,
         "context_sent": bool(s.num_ctx),
+        "ocr_llm_cleanup": bool(getattr(s, "ocr_llm_cleanup", 0)),
+        "ocr_llm_model": getattr(s, "ocr_llm_model", "") or "",
     }
 
 
@@ -70,7 +78,7 @@ def update_settings(data: SettingsPatch, db: Session = Depends(get_db)):
         if v is None:
             continue
         # SQLite Integer column — coerce bool so we store 0/1 consistently.
-        if k == "disable_thinking":
+        if k in ("disable_thinking", "ocr_llm_cleanup"):
             v = 1 if v else 0
         setattr(s, k, v)
     db.commit()

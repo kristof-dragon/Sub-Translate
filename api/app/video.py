@@ -28,10 +28,12 @@ VIDEO_EXTS: set[str] = {
 
 # ffprobe `codec_name` → (output extension, is-translatable-text, ffmpeg `-c:s` arg).
 #
-# We translate text-based formats only. Bitmap formats (PGS / VobSub / DVB) would
-# need OCR before translation, which is out of scope. ASS/SSA is text but our
-# SRT/VTT parsers don't handle its style overrides yet. `mov_text` is MP4's
-# internal text format — ffmpeg can transmux it to SRT with `-c:s srt`.
+# Text formats are translated directly. PGS bitmap subtitles route through an
+# OCR stage (see app/ocr.py) before translation. ASS/SSA is text but our
+# SRT/VTT parsers don't handle its style overrides yet. DVB and VobSub are
+# bitmap formats without a maintained Python decoder — deferred to a future
+# release. `mov_text` is MP4's internal text format — ffmpeg can transmux
+# it to SRT with `-c:s srt`.
 CODEC_MAP: dict[str, tuple[str, bool, str]] = {
     "subrip":            ("srt", True,  "copy"),
     "srt":               ("srt", True,  "copy"),   # alias some builds emit
@@ -39,10 +41,25 @@ CODEC_MAP: dict[str, tuple[str, bool, str]] = {
     "mov_text":          ("srt", True,  "srt"),    # MP4 tx3g → SRT
     "ass":               ("ass", False, "copy"),
     "ssa":               ("ass", False, "copy"),
-    "hdmv_pgs_subtitle": ("sup", False, "copy"),
+    "hdmv_pgs_subtitle": ("sup", True,  "copy"),   # OCR'd to SRT post-extract
     "dvd_subtitle":      ("sub", False, "copy"),
     "dvb_subtitle":      ("sub", False, "copy"),
 }
+
+# Codecs whose extracted output must be OCR'd before it can be translated.
+# Used by the extraction worker to decide whether to enqueue the file onto
+# the OCR worker (instead of marking it `extracted` and waiting for the
+# operator's manual Translate click).
+BITMAP_CODECS: set[str] = {"hdmv_pgs_subtitle"}
+
+
+def source_format_for(codec: str) -> str:
+    """Return the `File.source_format` value to record for a freshly-extracted
+    track of `codec`. Empty string for text formats — `source_format` is only
+    populated when OCR is required."""
+    if codec == "hdmv_pgs_subtitle":
+        return "pgs"
+    return ""
 
 
 class MediaPathError(Exception):

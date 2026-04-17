@@ -1,6 +1,10 @@
 export type FileStatus =
   | 'extracting'
   | 'extracted'
+  | 'ocr_queued'
+  | 'ocr_running'
+  | 'ocr_done'
+  | 'ocr_error'
   | 'queued'
   | 'detecting'
   | 'translating'
@@ -21,7 +25,9 @@ export interface SubtitleFile {
   id: number
   project_id: number
   original_filename: string
-  format: 'srt' | 'vtt'
+  // 'srt' | 'vtt' for native text subtitles, plus bitmap codecs like 'sup'
+  // (PGS) before OCR runs. After OCR succeeds the row flips to 'srt'.
+  format: string
   detected_lang: string
   target_lang: string
   model: string
@@ -36,6 +42,12 @@ export interface SubtitleFile {
   // Absolute path (media-root-relative in the UI) of the video the subtitle
   // was extracted from. "" for drag-and-drop uploads.
   source_video_path: string
+  // "pgs" if the file went through bitmap OCR, "" for native text subtitles.
+  // Lets the UI label OCR-origin rows and decide whether retry-OCR applies.
+  source_format: string
+  // Independent 0–100 counter for the OCR phase. Distinct from progress_pct
+  // (translation) so both phases render without overwriting each other.
+  ocr_progress_pct: number
 }
 
 export interface AppSettings {
@@ -47,6 +59,8 @@ export interface AppSettings {
   request_timeout: number // seconds
   num_ctx: number // 0 = don't send (use model default)
   context_sent: boolean // derived: true when num_ctx > 0
+  ocr_llm_cleanup: boolean
+  ocr_llm_model: string // empty = fall back to default_model
 }
 
 export interface OllamaModel {
@@ -64,8 +78,12 @@ export interface EventMessage {
   file_id: number
   status?: FileStatus
   progress_pct?: number
+  ocr_progress_pct?: number
   detected_lang?: string
   error?: string
+  // Sent by the OCR worker when format flips from "pgs" to "srt" after a
+  // successful OCR run, so the UI can re-render the row's format pill.
+  format?: string
 }
 
 export interface BrowseEntry {
