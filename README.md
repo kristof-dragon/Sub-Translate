@@ -86,3 +86,41 @@ cd web
 npm install
 npm run dev
 ```
+
+## Changelog
+
+### v1.2.0
+
+- **Async extraction queue** — `ffmpeg` demux runs on a dedicated worker so
+  operators can close the picker, queue another video, and keep browsing
+  while earlier tracks are still being extracted.
+- **Ollama `think=false` toggle** in Settings — sends `think: false` on
+  reasoning-capable models (deepseek-r1, qwq, gpt-oss) so the chain-of-
+  thought prelude is skipped and the translated output comes back
+  immediately.
+- **Configurable request timeout** — per-call Ollama HTTP timeout (10 s –
+  2 h) for big local models on slow hardware.
+- **Context-window override (`num_ctx`)** — optional `options.num_ctx`
+  forwarded to Ollama. The Settings page surfaces a derived "context
+  sent" flag so the operator can see whether a context value is attached
+  to each `/api/generate` call.
+- **Fix**: skip macOS AppleDouble (`._*`) sidecars in `/api/browse` so
+  bind-mounted media folders from macOS hosts no longer 500.
+- **DB**: additive SQLite migration at startup — existing deployments
+  pick up the new Settings columns without wiping data.
+
+### v1.1.0
+
+- Swap `mkvtoolnix-cli` for `ffmpeg`/`ffprobe` in the api container;
+  extraction now supports MKV, MP4, WebM, MOV, AVI, TS, … not just MKV.
+- Decouple extraction from translation — extracted tracks land in the
+  project as `extracted` and are translated on demand via a per-row
+  button, instead of auto-queueing.
+- Per-project storage layout (`data/uploads/<id>/`,
+  `data/translated/<id>/`).
+- LLM status dot in the topbar (green/red/yellow); click opens Settings.
+
+### v1.0.0
+
+- Initial internal-LAN release. Projects, batch SRT/VTT upload, Ollama
+  language detection, chunked translation, per-file progress, download.
