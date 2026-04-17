@@ -64,8 +64,39 @@ function LlmStatus() {
   )
 }
 
+// Below this width the drawer becomes a slide-in overlay and starts closed;
+// above it the drawer is part of the flex layout and starts open. Keep in sync
+// with the `@media (max-width: 700px)` rules in index.css.
+const MOBILE_MAX_PX = 700
+
 export default function App() {
-  const [open, setOpen] = useState(true)
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== 'undefined'
+      ? window.matchMedia(`(max-width: ${MOBILE_MAX_PX}px)`).matches
+      : false,
+  )
+  // `open` defaults to the opposite of mobile — desktop users see the drawer
+  // on first load, mobile users get it tucked away until they tap the burger.
+  const [open, setOpen] = useState(() => !isMobile)
+
+  useEffect(() => {
+    const mql = window.matchMedia(`(max-width: ${MOBILE_MAX_PX}px)`)
+    const handler = (e: MediaQueryListEvent) => {
+      setIsMobile(e.matches)
+      // Re-sync open state when crossing the breakpoint so a narrow window
+      // doesn't land on a wide-style permanently-open drawer and vice versa.
+      setOpen(!e.matches)
+    }
+    mql.addEventListener('change', handler)
+    return () => mql.removeEventListener('change', handler)
+  }, [])
+
+  // On mobile, tapping any nav item should dismiss the overlay — it would
+  // otherwise stay draped over the destination page until backdrop-tapped.
+  const closeIfMobile = () => {
+    if (isMobile) setOpen(false)
+  }
+
   const mkvGuiHref = `${window.location.protocol}//${window.location.hostname}:${MKVTOOLNIX_PORT}/`
 
   return (
@@ -74,6 +105,7 @@ export default function App() {
         <button
           className="hamburger"
           aria-label="Toggle menu"
+          aria-expanded={open}
           onClick={() => setOpen((o) => !o)}
         >
           &#9776;
@@ -83,8 +115,15 @@ export default function App() {
       </header>
 
       <div className="layout">
-        <aside className={open ? 'drawer' : 'drawer closed'}>
-          <nav>
+        {isMobile && open && (
+          <div
+            className="drawer-backdrop"
+            onClick={() => setOpen(false)}
+            aria-hidden="true"
+          />
+        )}
+        <aside className={`drawer${open ? '' : ' closed'}${isMobile ? ' mobile' : ''}`}>
+          <nav onClick={closeIfMobile}>
             <NavLink to="/" end>Projects</NavLink>
             <NavLink to="/settings">Settings</NavLink>
             <div className="drawer-section">Tools</div>

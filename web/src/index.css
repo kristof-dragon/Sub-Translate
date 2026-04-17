@@ -11,6 +11,7 @@
   --warn: #e0a14a;
   --error: #e5484d;
   --drawer-w: 220px;
+  --topbar-h: 48px;
 }
 
 * { box-sizing: border-box; }
@@ -74,9 +75,10 @@ label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 13px
   align-items: center;
   gap: 12px;
   padding: 10px 16px;
+  min-height: var(--topbar-h);
   background: var(--surface);
   border-bottom: 1px solid var(--border);
-  z-index: 10;
+  z-index: 60; /* above mobile drawer + backdrop */
 }
 .topbar h1 { font-size: 16px; margin: 0; font-weight: 600; }
 .hamburger {
@@ -123,11 +125,38 @@ label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 13px
   width: var(--drawer-w);
   background: var(--surface);
   border-right: 1px solid var(--border);
-  transition: margin-left 0.2s ease;
+  transition: margin-left 0.2s ease, transform 0.2s ease;
   flex-shrink: 0;
   overflow-y: auto;
 }
 .drawer.closed { margin-left: calc(-1 * var(--drawer-w)); }
+
+/* Mobile: drawer becomes a fixed slide-in overlay so it doesn't steal the
+   narrow content column. The desktop `margin-left` trick is cancelled and
+   swapped for `transform: translateX(-100%)` which slides off the left edge. */
+.drawer.mobile {
+  position: fixed;
+  top: var(--topbar-h);
+  left: 0;
+  bottom: 0;
+  z-index: 50;
+  margin-left: 0;
+  box-shadow: 4px 0 16px rgba(0, 0, 0, 0.4);
+}
+.drawer.mobile.closed {
+  margin-left: 0;
+  transform: translateX(-100%);
+}
+
+.drawer-backdrop {
+  position: fixed;
+  top: var(--topbar-h);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 49;
+}
 .drawer nav { display: flex; flex-direction: column; padding: 12px 0; }
 .drawer a {
   padding: 10px 20px;
