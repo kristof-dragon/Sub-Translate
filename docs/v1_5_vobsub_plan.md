@@ -15,33 +15,32 @@ Python tooling for it.
   status badges in the UI. v1.5.0 is *plug a second format in*, not
   *redesign anything*.
 
-## Investigation needed before any code (Phase 0)
+## Phase 0 findings (2026-04-18)
 
-These have to land *before* picking an architecture, because the
-chosen tool determines requirements + Dockerfile changes. I will not
-guess at tool names in the plan — that's a violation of the
-"never speculative" rule and the prior v1.4.0 work proved bitmap-OCR
-tooling claims need to be checked, not assumed.
+**Tool selected: [subtile-ocr](https://github.com/gwen-lg/subtile-ocr)
+0.x (Rust CLI, GPL-3.0).** Last push 2026-01-26. Direct
+`VobSub → SRT` pipeline, mirrors how pgsrip integrates today.
 
-1. **Tool / library selection.** Identify a maintained Python module
-   *or* CLI binary that takes a VobSub `.sub` + `.idx` pair (or just
-   `.sub`) and produces cue text + timings. Acceptance bar: at least
-   one commit in the last 18 months, runs against the operator's
-   sample, and doesn't require commercial licensing.
-2. **ffmpeg output shape.** Verify what `ffmpeg -c:s copy ... out.sub`
-   actually writes for `dvd_subtitle`. VobSub on DVD is a `.sub` (MPEG
-   PS with subpicture data) + `.idx` (text index) pair; whether
-   ffmpeg emits both depends on muxer choice. May need a different
-   muxer or a post-step to derive `.idx`.
-3. **Container deps.** Whatever Phase 0.1 picks tells us if we need
-   new system packages. The v1.4.0 image already has `tesseract-ocr`
-   + 13 language packs + `imagemagick`, so a tesseract-based path is
-   nearly free. PyAV-based paths add `libav*-dev` and `python3-dev`.
+Why this one:
+- Actively maintained — only candidate with a 2026 commit.
+- Invocation is trivial: `subtile-ocr -l <tess_lang> -o out.srt
+  in.idx` (reads the sibling `.sub` automatically).
+- Tesseract language codes are the same ones we already normalise
+  to in `ocr.normalize_lang_for_tesseract` — zero new mapping work.
+- GPL-3.0 only attaches to derivative works; shelling out to a GPL
+  binary from MIT-licensed code is fine per the FSF's own analysis.
+- Better preprocessing than its predecessor (`vobsubocr`, last
+  commit 2023) and the abandoned `VobSub2SRT` (last commit 2017).
 
-If Phase 0.1 finds nothing acceptable, the fallback is rolling our
-own: PyAV decode → render each subpicture to a PIL image → tesseract.
-That's significant bespoke work and would justify pushing v1.5.0
-scope down or splitting it.
+Rejected alternatives (full table in commit history of this doc):
+- `vobsubocr` — stale (2023), `subtile-ocr` is the active fork.
+- `VobSub2SRT` — dead (2017), broken on tesseract 5.x.
+- No maintained Python wrapper exists. There is **no pgsrip
+  equivalent** for VobSub.
+
+**ffmpeg confirmation.** `ffmpeg -i in.mkv -map 0:s:0 -c:s copy
+out.sub` against a `dvd_subtitle` track writes BOTH `out.sub` and
+`out.idx` automatically. No extra muxer flags required.
 
 ## Architecture (reusing v1.4.0 scaffolding)
 
@@ -61,8 +60,24 @@ Add a sibling to `ocr_pgs_sup`:
 
 ```python
 def ocr_vobsub(sub_path: Path, lang_hint: str | None) -> list[Cue]:
-    """OCR a VobSub .sub (with sibling .idx if Phase 0.2 requires)."""
+    """OCR a VobSub .sub via subtile-ocr; return parsed cues.
+
+    Expects a sibling .idx next to sub_path (ffmpeg writes the pair
+    automatically). Shells out to:
+        subtile-ocr -l <tess_lang> -o <tmp>.srt <sub_path>.idx
+    Then reads the SRT back through our existing parser.
+    """
 ```
+
+Implementation outline:
+1. Resolve idx_path = `sub_path.with_suffix(".idx")`. Fail loud with
+   "missing .idx sidecar" if not present.
+2. Stage outputs in a tempdir like `ocr_pgs_sup` does.
+3. `subprocess.run(["subtile-ocr", "-l", lang3, "-o", out_srt,
+   str(idx_path)], check=True, capture_output=True)`. Surface stderr
+   in the exception message on failure so the operator sees what
+   tesseract complained about.
+4. Read `out_srt`, parse via `parse_srt`, return cues.
 
 `llm_cleanup_cues` is already format-agnostic — reused as-is, just
 labelled "VobSub" in the prompt.
@@ -85,12 +100,25 @@ landing, same `ocr_queue.put(file_id)`.
 The post-OCR write-out (cues → SRT → flip status to `ocr_done`) is
 shared and untouched.
 
-### `api/Dockerfile` + `api/requirements.txt`
+### `api/Dockerfile`
 
-Determined by Phase 0 outcome. Best case (tesseract + an existing
-small Python wrapper): no Dockerfile changes, one new
-`requirements.txt` line. Worst case (roll our own with PyAV): add
-PyAV + dev headers, ~50 MB image growth.
+Multi-stage build to keep the runtime image lean:
+
+1. **Builder stage** — `rust:bookworm` base, install
+   `libtesseract-dev` + `libleptonica-dev` + `clang`, run
+   `cargo install --root /opt/subtile subtile-ocr`. Throwaway stage.
+2. **Runtime stage** (existing image) — `COPY --from=builder
+   /opt/subtile/bin/subtile-ocr /usr/local/bin/`. Add
+   `libtesseract5` + `libleptonica6` runtime libs (likely already
+   pulled in transitively by `tesseract-ocr` from v1.4.0; verify).
+
+Estimated runtime image growth: ~5 MB (the binary itself). Builder
+stage is ~1.5 GB but never ends up in the published image.
+
+### `api/requirements.txt`
+
+No changes. We're shelling out to a CLI, not importing a Python
+library.
 
 ### Frontend
 
@@ -152,13 +180,16 @@ strings, and `ocr_progress_pct` / OCR statuses landed in v1.4.0.
 
 ## Risks
 
-- **No suitable tool found in Phase 0.1.** This is the dominant
-  unknown. PGS had pgsrip; VobSub has no equivalent that I've
-  verified. If Phase 0 confirms that, the honest outcome is either
-  (a) defer v1.5.0 again, or (b) commit to the roll-our-own PyAV
-  path with a longer timeline.
-- **Image size growth.** Acceptable budget: another ~50 MB. Beyond
-  that we should reconsider.
+- **Image build time.** The Rust builder stage adds ~2 minutes to a
+  cold `docker build` (cargo + dep crates + leptess link step).
+  Cached after the first build. Acceptable for a self-hosted app.
+- **subtile-ocr is single-maintainer.** Active today, but bus-factor
+  one. Mitigated by the shell-out integration — if it goes stale we
+  swap CLIs without touching anything outside `ocr.py`.
 - **OCR quality on DVD-era subtitles.** VobSub bitmaps are typically
   lower-res than PGS (720×480 vs 1920×1080), which hurts tesseract
   accuracy. The LLM cleanup pass becomes more valuable here, not less.
+- **ffmpeg .idx output dependency.** ffmpeg must produce both .sub +
+  .idx for the existing extract code to work unchanged. Verified in
+  Phase 0 against the docs; needs a sanity check against the
+  operator's actual sample as part of step 5 below.
