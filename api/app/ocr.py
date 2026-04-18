@@ -1,20 +1,25 @@
 """OCR for bitmap subtitle formats.
 
-v1.4.0 ships PGS only — `.sup` files are run through pgsrip (which wraps
-tesseract) and the resulting SRT is parsed back into the project's `Cue`
-type so the rest of the pipeline doesn't care that the cues came from
-OCR. DVB and VobSub are deferred to a future release.
+Two backends are wired in:
+  - PGS (Blu-ray `.sup`) → pgsrip (Python wrapper around tesseract).
+  - VobSub (DVD `.sub` + `.idx` pair) → subtile-ocr (Rust CLI, bundled
+    into the API image, also drives tesseract underneath).
+
+Both produce an SRT that we parse back into the project's `Cue` type so
+the rest of the pipeline doesn't care which backend ran. DVB stays
+deferred — no maintained tooling.
 
 An optional text-only LLM cleanup pass runs each cue through Ollama with
 a "fix OCR errors" prompt before the row is offered for translation.
 Vision-LLM cleanup (sending the rendered subtitle PNG alongside the
 candidate text) is on the roadmap but needs a per-cue render pipeline
-that pgsrip's high-level API doesn't expose.
+that neither backend's high-level API exposes.
 """
 from __future__ import annotations
 
 import logging
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Awaitable, Callable
@@ -122,14 +127,70 @@ def ocr_pgs_sup(sup_path: Path, lang_hint: str | None) -> list[Cue]:
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
+def ocr_vobsub(sub_path: Path, lang_hint: str | None) -> list[Cue]:
+    """OCR a VobSub `.sub` via subtile-ocr; return parsed cues.
+
+    Expects a sibling `.idx` next to `sub_path` — ffmpeg writes the pair
+    automatically when extracting a `dvd_subtitle` stream. subtile-ocr is
+    a standalone Rust CLI bundled into the API image (multi-stage Docker
+    build); we shell out and read the SRT it produces back through our
+    existing parser. Falls back to English when no language hint is
+    available; tesseract still produces best-effort text either way.
+    """
+    idx_path = sub_path.with_suffix(".idx")
+    if not idx_path.is_file():
+        raise RuntimeError(
+            f"VobSub .idx sidecar missing — expected {idx_path.name} next to "
+            f"{sub_path.name}; ffmpeg writes both files during extraction"
+        )
+
+    lang3 = normalize_lang_for_tesseract(lang_hint)
+
+    work_dir = Path(tempfile.mkdtemp(prefix="ocr_vobsub_"))
+    try:
+        out_srt = work_dir / "out.srt"
+        try:
+            subprocess.run(
+                [
+                    "subtile-ocr",
+                    "-l", lang3,
+                    "-o", str(out_srt),
+                    str(idx_path),
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=1800,
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                "subtile-ocr is not installed in the api container"
+            ) from exc
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                f"subtile-ocr failed: {(exc.stderr or '').strip() or exc}"
+            ) from exc
+
+        if not out_srt.exists() or out_srt.stat().st_size == 0:
+            raise RuntimeError("subtile-ocr produced no .srt output")
+
+        srt_text = out_srt.read_text(encoding="utf-8-sig", errors="replace")
+        cues = parse_srt(srt_text)
+        if not cues:
+            raise RuntimeError("subtile-ocr emitted an empty SRT (no cues recognised)")
+        return cues
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
 _CLEANUP_PROMPT = (
     "You are correcting OCR errors in a subtitle line. The text was OCR'd "
-    "from a Blu-ray PGS bitmap subtitle in {lang}. Fix obvious OCR mistakes: "
-    "letter/digit confusions (l/I/1, 0/O), missing or wrong diacritics, "
-    "broken word boundaries, stray punctuation. PRESERVE: original meaning, "
-    "line breaks (the literal token <BR>), and HTML-like style tags "
-    "(<i>, <b>, <u>, <font>). Do NOT translate. Do NOT add commentary. "
-    "Return ONLY the corrected line.\n\n"
+    "from a bitmap subtitle (Blu-ray PGS or DVD VobSub) in {lang}. Fix "
+    "obvious OCR mistakes: letter/digit confusions (l/I/1, 0/O), missing "
+    "or wrong diacritics, broken word boundaries, stray punctuation. "
+    "PRESERVE: original meaning, line breaks (the literal token <BR>), and "
+    "HTML-like style tags (<i>, <b>, <u>, <font>). Do NOT translate. Do "
+    "NOT add commentary. Return ONLY the corrected line.\n\n"
     "OCR'd line:\n{text}"
 )
 _BR = "<BR>"
@@ -189,10 +250,11 @@ def lang_hint_from_filename(filename: str) -> str | None:
     """Best-effort language hint from an extraction filename.
 
     Extracted bitmap subtitles are named `<stem>.<lang>.stream<n>.<ext>`
-    by routers/video.py, so the language tag is the second-from-last
-    dot-separated chunk (when present and 2-3 chars). Returns None if
-    no plausible tag is found, which `normalize_lang_for_tesseract`
-    will then resolve to English.
+    by routers/video.py (same convention for `.sup` PGS and `.sub`
+    VobSub), so the language tag is the second-from-last dot-separated
+    chunk (when present and 2-3 chars). Returns None if no plausible
+    tag is found, which `normalize_lang_for_tesseract` will then
+    resolve to English.
     """
     parts = Path(filename).name.split(".")
     # Need at least <stem>.<lang>.<something>.<ext> → 4 parts.

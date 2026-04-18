@@ -28,12 +28,15 @@ VIDEO_EXTS: set[str] = {
 
 # ffprobe `codec_name` → (output extension, is-translatable-text, ffmpeg `-c:s` arg).
 #
-# Text formats are translated directly. PGS bitmap subtitles route through an
-# OCR stage (see app/ocr.py) before translation. ASS/SSA is text but our
-# SRT/VTT parsers don't handle its style overrides yet. DVB and VobSub are
-# bitmap formats without a maintained Python decoder — deferred to a future
-# release. `mov_text` is MP4's internal text format — ffmpeg can transmux
-# it to SRT with `-c:s srt`.
+# Text formats are translated directly. Bitmap formats (PGS, VobSub) route
+# through an OCR stage (see app/ocr.py) before translation. ASS/SSA is text
+# but our SRT/VTT parsers don't handle its style overrides yet. DVB stays
+# bitmap-but-unsupported — no maintained Python or CLI decoder we can ship.
+# `mov_text` is MP4's internal text format — ffmpeg transmuxes to SRT.
+#
+# For VobSub: ffmpeg's vobsub muxer writes BOTH a `.sub` (subpicture stream)
+# and an `.idx` (text index of timings/positions) when the output extension
+# is `.sub` — the OCR stage uses both via subtile-ocr.
 CODEC_MAP: dict[str, tuple[str, bool, str]] = {
     "subrip":            ("srt", True,  "copy"),
     "srt":               ("srt", True,  "copy"),   # alias some builds emit
@@ -41,8 +44,8 @@ CODEC_MAP: dict[str, tuple[str, bool, str]] = {
     "mov_text":          ("srt", True,  "srt"),    # MP4 tx3g → SRT
     "ass":               ("ass", False, "copy"),
     "ssa":               ("ass", False, "copy"),
-    "hdmv_pgs_subtitle": ("sup", True,  "copy"),   # OCR'd to SRT post-extract
-    "dvd_subtitle":      ("sub", False, "copy"),
+    "hdmv_pgs_subtitle": ("sup", True,  "copy"),   # PGS → OCR'd to SRT (pgsrip)
+    "dvd_subtitle":      ("sub", True,  "copy"),   # VobSub → OCR'd (subtile-ocr)
     "dvb_subtitle":      ("sub", False, "copy"),
 }
 
@@ -50,7 +53,7 @@ CODEC_MAP: dict[str, tuple[str, bool, str]] = {
 # Used by the extraction worker to decide whether to enqueue the file onto
 # the OCR worker (instead of marking it `extracted` and waiting for the
 # operator's manual Translate click).
-BITMAP_CODECS: set[str] = {"hdmv_pgs_subtitle"}
+BITMAP_CODECS: set[str] = {"hdmv_pgs_subtitle", "dvd_subtitle"}
 
 
 def source_format_for(codec: str) -> str:
@@ -59,6 +62,8 @@ def source_format_for(codec: str) -> str:
     populated when OCR is required."""
     if codec == "hdmv_pgs_subtitle":
         return "pgs"
+    if codec == "dvd_subtitle":
+        return "vobsub"
     return ""
 
 
@@ -269,3 +274,15 @@ def extract_track(relative: str, track_index: int, out_path: Path) -> None:
 
     if not out_path.exists() or out_path.stat().st_size == 0:
         raise MediaPathError("ffmpeg produced no output")
+
+    # VobSub is a pair: ffmpeg writes the bitmap stream to `<name>.sub` AND
+    # the timing/position index to `<name>.idx`. The OCR step needs both —
+    # surface a missing .idx as an extraction failure so the operator sees
+    # the problem here instead of as a confusing OCR-time error.
+    if track.codec == "dvd_subtitle":
+        idx_path = out_path.with_suffix(".idx")
+        if not idx_path.exists() or idx_path.stat().st_size == 0:
+            raise MediaPathError(
+                "ffmpeg did not produce the .idx sidecar — VobSub OCR needs both "
+                ".sub and .idx and ffmpeg should have written them together"
+            )

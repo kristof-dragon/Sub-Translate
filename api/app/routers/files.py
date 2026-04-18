@@ -260,22 +260,22 @@ async def translate_file(
 
 @router.post("/files/{file_id}/ocr", status_code=202)
 async def retry_ocr(file_id: int, db: Session = Depends(get_db)):
-    """Re-queue a failed PGS OCR job.
+    """Re-queue a failed bitmap OCR job.
 
     Only valid for rows that originated from the bitmap-extraction flow
-    (`source_format == "pgs"`) and ended up at `ocr_error`. The on-disk
-    `.sup` is still where extraction wrote it, so we just reset the
-    progress fields and push the file id back onto `ocr_queue`.
+    (`source_format` in `pgs`/`vobsub`) and ended up at `ocr_error`. The
+    on-disk bitmap is still where extraction wrote it, so we just reset
+    the progress fields and push the file id back onto `ocr_queue`.
     """
     f = db.get(models.File, file_id)
     if not f:
         raise HTTPException(404, "File not found")
-    if (f.source_format or "") != "pgs":
-        raise HTTPException(409, "OCR retry only applies to PGS-origin files")
+    if (f.source_format or "") not in ("pgs", "vobsub"):
+        raise HTTPException(409, "OCR retry only applies to bitmap-origin files")
     if f.status != "ocr_error":
         raise HTTPException(409, f"Cannot retry OCR from status {f.status!r}")
     if not f.stored_original_path or not os.path.exists(f.stored_original_path):
-        raise HTTPException(400, "Source .sup file is missing on disk")
+        raise HTTPException(400, "Source bitmap file is missing on disk")
 
     f.status = "ocr_queued"
     f.ocr_progress_pct = 0

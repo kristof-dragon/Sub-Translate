@@ -1,14 +1,17 @@
 """Tests for the OCR module's pure helpers.
 
-The pgsrip + tesseract end-to-end path is exercised by the docker smoke
-test against a real .sup file — it requires the tesseract binary and
-language packs that only ship inside the API image. Here we cover the
-pieces that don't need any of that: language normalisation, filename
-hint parsing, and the LLM cleanup loop with a stubbed Ollama client.
+The pgsrip + tesseract and subtile-ocr end-to-end paths are exercised
+by the docker smoke test against real bitmap files — both require
+binaries and language packs that only ship inside the API image. Here
+we cover the pieces that don't need any of that: language normalisation,
+filename hint parsing, the VobSub shell-out wrapper (with subprocess
+stubbed), and the LLM cleanup loop with a stubbed Ollama client.
 """
 from __future__ import annotations
 
 import asyncio
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -65,6 +68,120 @@ def test_lang_hint_returns_none_for_filenames_without_tag():
 def test_lang_hint_rejects_non_alpha_tag():
     # The slot has to look like a language code, not a number / random token.
     assert ocr.lang_hint_from_filename("Movie.123.stream0.sup") is None
+
+
+# ---------------------------------------------------------------------------
+# ocr_vobsub — subtile-ocr shell-out wrapper, subprocess stubbed
+# ---------------------------------------------------------------------------
+
+_SAMPLE_SRT = (
+    "1\n"
+    "00:00:01,000 --> 00:00:02,000\n"
+    "Hello world\n"
+    "\n"
+    "2\n"
+    "00:00:03,000 --> 00:00:04,000\n"
+    "Second cue\n"
+)
+
+
+def _make_vobsub_pair(tmp_path: Path) -> Path:
+    """Write a `.sub` and matching `.idx` and return the .sub path."""
+    sub_path = tmp_path / "track.sub"
+    sub_path.write_bytes(b"\x00\x00\x01\xba")  # MPEG PS pack header magic
+    sub_path.with_suffix(".idx").write_text("# VobSub index\n")
+    return sub_path
+
+
+def test_ocr_vobsub_raises_when_idx_sidecar_missing(tmp_path):
+    sub_path = tmp_path / "lonely.sub"
+    sub_path.write_bytes(b"\x00\x00\x01\xba")  # no sibling .idx written
+
+    with pytest.raises(RuntimeError, match=r"\.idx sidecar missing"):
+        ocr.ocr_vobsub(sub_path, "en")
+
+
+def test_ocr_vobsub_invokes_subtile_ocr_with_correct_args(tmp_path, monkeypatch):
+    sub_path = _make_vobsub_pair(tmp_path)
+    captured_cmd: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd.extend(cmd)
+        # subtile-ocr writes its output to the path passed via -o.
+        out_idx = cmd.index("-o") + 1
+        Path(cmd[out_idx]).write_text(_SAMPLE_SRT)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(ocr.subprocess, "run", fake_run)
+
+    cues = ocr.ocr_vobsub(sub_path, "en")
+
+    # Argument shape we documented in the plan.
+    assert captured_cmd[0] == "subtile-ocr"
+    assert "-l" in captured_cmd
+    assert captured_cmd[captured_cmd.index("-l") + 1] == "eng"
+    # The .idx (not .sub) is the input subtile-ocr expects.
+    assert captured_cmd[-1].endswith(".idx")
+    assert [c.text for c in cues] == ["Hello world", "Second cue"]
+
+
+def test_ocr_vobsub_uses_normalized_lang_code(tmp_path, monkeypatch):
+    sub_path = _make_vobsub_pair(tmp_path)
+    seen_lang: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        seen_lang.append(cmd[cmd.index("-l") + 1])
+        Path(cmd[cmd.index("-o") + 1]).write_text(_SAMPLE_SRT)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(ocr.subprocess, "run", fake_run)
+
+    ocr.ocr_vobsub(sub_path, "hu")    # ISO-639-1 → hun
+    ocr.ocr_vobsub(sub_path, None)    # missing → falls back to eng
+
+    assert seen_lang == ["hun", "eng"]
+
+
+def test_ocr_vobsub_surfaces_subprocess_stderr(tmp_path, monkeypatch):
+    sub_path = _make_vobsub_pair(tmp_path)
+
+    def fake_run(cmd, **kwargs):
+        raise subprocess.CalledProcessError(
+            returncode=1, cmd=cmd, output="", stderr="tesseract: language data missing"
+        )
+
+    monkeypatch.setattr(ocr.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="tesseract: language data missing"):
+        ocr.ocr_vobsub(sub_path, "en")
+
+
+def test_ocr_vobsub_raises_when_binary_missing(tmp_path, monkeypatch):
+    sub_path = _make_vobsub_pair(tmp_path)
+
+    def fake_run(cmd, **kwargs):
+        raise FileNotFoundError("subtile-ocr")
+
+    monkeypatch.setattr(ocr.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="subtile-ocr is not installed"):
+        ocr.ocr_vobsub(sub_path, "en")
+
+
+def test_ocr_vobsub_raises_when_output_is_empty(tmp_path, monkeypatch):
+    sub_path = _make_vobsub_pair(tmp_path)
+
+    def fake_run(cmd, **kwargs):
+        # Process succeeds but produces no SRT (e.g. tesseract had nothing
+        # to extract from a blank track) — caller should surface this as
+        # an OCR error rather than silently flipping to ocr_done with 0 cues.
+        Path(cmd[cmd.index("-o") + 1]).write_text("")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(ocr.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="produced no .srt output"):
+        ocr.ocr_vobsub(sub_path, "en")
 
 
 # ---------------------------------------------------------------------------

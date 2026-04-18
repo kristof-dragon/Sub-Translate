@@ -187,7 +187,7 @@ async def _process_extraction(file_id: int, video_path: str, track_id: int) -> N
     """Run ffmpeg for one already-created File row and flip its status.
 
     For text formats the row lands at `extracted` and waits for the operator
-    to click Translate. For bitmap formats (currently PGS) the row lands at
+    to click Translate. For bitmap formats (PGS, VobSub) the row lands at
     `ocr_queued` and is auto-enqueued onto `ocr_queue` — the operator gets
     a chance to review the OCR output before triggering translation.
     """
@@ -203,7 +203,7 @@ async def _process_extraction(file_id: int, video_path: str, track_id: int) -> N
     # Blocking ffmpeg — run in a thread so the asyncio loop keeps serving SSE etc.
     await asyncio.to_thread(video.extract_track, video_path, track_id, out_path)
 
-    if source_format == "pgs":
+    if source_format in ("pgs", "vobsub"):
         _set_status(
             file_id,
             stored_original_path=str(out_path),
@@ -248,7 +248,9 @@ async def _process_ocr(file_id: int) -> None:
     """OCR a bitmap-source file and (optionally) clean up via Ollama.
 
     Pipeline:
-      1. Run pgsrip on the .sup → list[Cue] (in a thread; pgsrip is sync).
+      1. Pick the format-specific OCR backend (pgsrip for PGS,
+         subtile-ocr for VobSub) and run it on the bitmap → list[Cue]
+         (in a thread; both backends are sync shell-outs).
       2. If the operator enabled OCR cleanup in Settings, send each cue's
          text through Ollama for OCR-error correction.
       3. Write the cues to /data/ocr/<pid>/<id>_<stem>.srt.
@@ -262,28 +264,33 @@ async def _process_ocr(file_id: int) -> None:
         return
     f, _proj, settings = ctx
 
-    if (f.source_format or "") != "pgs":
-        # Defensive: only PGS is implemented in v1.4.0. Any other bitmap
+    src_fmt = (f.source_format or "")
+    if src_fmt == "pgs":
+        ocr_fn = ocr.ocr_pgs_sup
+    elif src_fmt == "vobsub":
+        ocr_fn = ocr.ocr_vobsub
+    else:
+        # Defensive: only known bitmap formats reach here. Any other
         # source shouldn't have been enqueued, but if it was, fail loud
         # rather than silently dropping the row.
-        raise RuntimeError(f"OCR not supported for source_format={f.source_format!r}")
+        raise RuntimeError(f"OCR not supported for source_format={src_fmt!r}")
 
-    sup_path = Path(f.stored_original_path)
-    if not sup_path.is_file():
-        raise RuntimeError(f"PGS file missing on disk: {sup_path}")
+    bitmap_path = Path(f.stored_original_path)
+    if not bitmap_path.is_file():
+        raise RuntimeError(f"Bitmap source file missing on disk: {bitmap_path}")
 
-    # OCR phase 1: pgsrip → cues. The language hint comes from the original
-    # filename (extraction writes `<stem>.<lang>.streamN.sup`), and ocr.py
+    # OCR phase 1: backend → cues. The language hint comes from the original
+    # filename (extraction writes `<stem>.<lang>.streamN.<ext>`), and ocr.py
     # falls back to English if no plausible tag is present.
     lang_hint = ocr.lang_hint_from_filename(f.original_filename)
 
     _set_status(file_id, status="ocr_running", ocr_progress_pct=0, error="")
     await publish({"file_id": file_id, "status": "ocr_running", "ocr_progress_pct": 0})
 
-    cues = await asyncio.to_thread(ocr.ocr_pgs_sup, sup_path, lang_hint)
+    cues = await asyncio.to_thread(ocr_fn, bitmap_path, lang_hint)
 
-    # pgsrip is a single shell-out — there's no fine-grained progress for
-    # the OCR call itself. Mark phase 1 done at 50% so the cleanup phase
+    # Each backend is a single shell-out — there's no fine-grained progress
+    # for the OCR call itself. Mark phase 1 done at 50% so the cleanup phase
     # has visible progress to fill in (or jump straight to 100% when off).
     cleanup_on = bool(getattr(settings, "ocr_llm_cleanup", 0)) if settings else False
     if cleanup_on:

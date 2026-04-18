@@ -36,8 +36,26 @@ def test_codec_map_pgs_is_supported_via_ocr():
     assert (ext, supported) == ("sup", True)
 
 
+def test_codec_map_vobsub_is_supported_via_ocr():
+    # v1.5.0 routes VobSub through subtile-ocr after extraction, mirroring
+    # the PGS pipeline. The .idx sidecar is produced alongside .sub by
+    # ffmpeg automatically — see extract_track for the post-extract check.
+    ext, supported, _ = CODEC_MAP["dvd_subtitle"]
+    assert (ext, supported) == ("sub", True)
+
+
+def test_codec_map_dvb_remains_unsupported():
+    # No maintained Python or CLI decoder for DVB subtitles — still deferred.
+    ext, supported, _ = CODEC_MAP["dvb_subtitle"]
+    assert (ext, supported) == ("sub", False)
+
+
 def test_source_format_for_pgs_returns_pgs():
     assert video.source_format_for("hdmv_pgs_subtitle") == "pgs"
+
+
+def test_source_format_for_vobsub_returns_vobsub():
+    assert video.source_format_for("dvd_subtitle") == "vobsub"
 
 
 def test_source_format_for_text_codecs_is_empty():
@@ -80,11 +98,12 @@ def test_track_from_json_pgs_is_supported_via_ocr():
 def test_track_from_json_unknown_codec_is_unsupported():
     payload = {
         "index": 0,
-        "codec_name": "dvb_subtitle",
+        "codec_name": "wholly_unknown_codec",
         "tags": {"language": "eng"},
     }
     t = _track_from_json(payload)
     assert t.supported is False
+    assert t.ext is None
 
 
 @pytest.fixture
