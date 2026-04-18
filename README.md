@@ -99,6 +99,12 @@ npm run dev
 
 ### v1.4.0
 
+> ⚠️ **Verification status:** the OCR pipeline passes its unit tests
+> and the API image builds, but the end-to-end pgsrip → tesseract path
+> has not yet been exercised against a real Blu-ray `.sup` sample in
+> Docker. Treat this release as "ready to try" rather than
+> "production-verified" until a smoke test lands in v1.4.x.
+
 - **PGS OCR** — Blu-ray PGS bitmap subtitle tracks now extract, OCR, and
   translate end-to-end. Extraction lands the row at `ocr_queued`; a new
   CPU-bound worker picks it up, runs pgsrip (tesseract under the hood),
