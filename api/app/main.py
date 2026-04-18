@@ -61,7 +61,7 @@ async def lifespan(app: FastAPI):
                 pass
 
 
-app = FastAPI(title="Subtitle Translator API", version="1.4.0", lifespan=lifespan)
+app = FastAPI(title="Subtitle Translator API", version="1.5.0", lifespan=lifespan)
 
 # Permissive CORS — the app is internal-only and served behind the web container's nginx.
 app.add_middleware(

@@ -66,16 +66,24 @@ ffprobe `codec_name` — handled across MKV, MP4, WebM, MOV, AVI, TS, …
 | `mov_text`          | SRT    | ✓ (transmux) | ✓     |
 | `ass` / `ssa`       | ASS    | shown   | not yet   |
 | `hdmv_pgs_subtitle` | PGS    | ✓ (OCR) | ✓         |
-| `dvd_subtitle`      | VobSub | shown   | no (bitmap) |
+| `dvd_subtitle`      | VobSub | ✓ (OCR) | ✓         |
 | `dvb_subtitle`      | DVB    | shown   | no (bitmap) |
 
-PGS (Blu-ray bitmap subtitles) are demuxed as `.sup`, run through
-tesseract via [pgsrip](https://github.com/ratoaq2/pgsrip), and the
-recovered SRT is fed back into the normal translate pipeline. An
+Bitmap subtitle tracks are demuxed and routed through an OCR backend
+before translation:
+
+- **PGS** (Blu-ray, `.sup`) → [pgsrip](https://github.com/ratoaq2/pgsrip)
+  (Python wrapper around tesseract).
+- **VobSub** (DVD, `.sub` + `.idx`) →
+  [subtile-ocr](https://github.com/gwen-lg/subtile-ocr) (Rust CLI, also
+  driving tesseract; bundled into the API image via a multi-stage
+  Docker build).
+
+The recovered SRT is fed back into the normal translate pipeline. An
 optional per-cue Ollama "OCR cleanup" pass can be enabled in Settings
-to fix common OCR mistakes before translation. VobSub and DVB still
-extract to disk for archival, but in-app translation is deferred to a
-future release.
+to fix common OCR mistakes before translation. DVB still extracts to
+disk for archival, but in-app translation is deferred — no maintained
+Python or CLI decoder ships with v1.5.0.
 
 ## Development
 
@@ -96,6 +104,34 @@ npm run dev
 ```
 
 ## Changelog
+
+### v1.5.0
+
+> ⚠️ **Verification status:** plug a second OCR backend (subtile-ocr)
+> into the v1.4.0 pipeline. Unit tests cover the new wrapper with
+> subprocess stubbed; the end-to-end VobSub path will be smoke-tested
+> in Docker against the operator's DVD `.sub` sample as part of the
+> v1.5.0 deployment. The PGS path's `v1.4.0` smoke-test caveat still
+> stands until a Blu-ray `.sup` sample is available.
+
+- **VobSub OCR** — DVD `dvd_subtitle` tracks now extract, OCR, and
+  translate end-to-end via the same `extracted → ocr_queued →
+  ocr_running → ocr_done` pipeline introduced for PGS in v1.4.0. The
+  backend is [subtile-ocr](https://github.com/gwen-lg/subtile-ocr)
+  (Rust CLI, GPL-3.0, shelled out — no derivative-work concern). The
+  optional Ollama cleanup pass and the `Retry OCR` button work for
+  VobSub rows unchanged.
+- **Container**: multi-stage Dockerfile compiles
+  `subtile-ocr 0.2.6` against `libtesseract-dev` + `libleptonica-dev`
+  in a throwaway Rust builder, then `COPY`s the ~5 MB binary into the
+  runtime image. `libleptonica-dev` is now installed in the runtime
+  image as well so the binary resolves its dynamic dep.
+- **Extraction guard**: `extract_track` validates that the `.idx`
+  sidecar landed alongside `.sub` for VobSub tracks, surfacing missing
+  sidecars as an extraction error instead of as a confusing OCR
+  failure later.
+- **DVB stays deferred** — still no sample on hand and still no
+  maintained Python or CLI decoder.
 
 ### v1.4.0
 
@@ -127,8 +163,8 @@ npm run dev
   the File table; `ocr_llm_cleanup` and `ocr_llm_model` on Settings.
   Existing deployments pick these up automatically on startup.
 
-VobSub and DVB are still deferred — they need bespoke per-frame
-rendering work that no maintained Python library currently provides.
+VobSub and DVB are still deferred from v1.4.0 — VobSub picks up its
+own OCR backend in v1.5.0; DVB stays deferred there too.
 
 ### v1.3.1
 
