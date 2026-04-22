@@ -273,7 +273,7 @@ table.file-list { width: 100%; border-collapse: collapse; }
     90px                /* detected */
     90px                /* target */
     minmax(140px, 1fr)  /* progress */
-    auto;               /* actions */
+    220px;              /* actions — fixed so fr columns stay consistent across rows */
   gap: 12px;
   align-items: center;
   padding: 8px 10px;

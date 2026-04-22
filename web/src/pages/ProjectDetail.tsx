@@ -44,6 +44,8 @@ export default function ProjectDetail() {
   const [err, setErr] = useState('')
   const [uploading, setUploading] = useState(false)
   const [videoOpen, setVideoOpen] = useState(false)
+  const [savingDefaults, setSavingDefaults] = useState(false)
+  const [savedDefaults, setSavedDefaults] = useState(false)
 
   // Bulk-export state: file ids ticked for export + the active phase.
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
@@ -294,6 +296,24 @@ export default function ProjectDetail() {
     }
   }
 
+  const handleSaveDefaults = async () => {
+    setSavingDefaults(true)
+    setSavedDefaults(false)
+    try {
+      const updated = await api.updateProject(projectId, {
+        default_target_lang: targetLang,
+        default_model: model,
+      })
+      setProject(updated)
+      setSavedDefaults(true)
+      setTimeout(() => setSavedDefaults(false), 2000)
+    } catch (e: unknown) {
+      setErr(String(e))
+    } finally {
+      setSavingDefaults(false)
+    }
+  }
+
   const handleTranslate = async (fid: number) => {
     if (!targetLang) {
       setErr('Pick a target language at the top of the page first')
@@ -352,6 +372,20 @@ export default function ProjectDetail() {
               ))}
             </select>
           </div>
+        </div>
+        <div className="row" style={{ gap: 8 }}>
+          <button
+            type="button"
+            className="small primary"
+            onClick={handleSaveDefaults}
+            disabled={savingDefaults || !targetLang}
+            title="Save selected language and model as this project's defaults"
+          >
+            {savingDefaults ? 'Saving…' : 'Save as defaults'}
+          </button>
+          {savedDefaults && (
+            <span className="small" style={{ color: 'var(--success)' }}>Saved</span>
+          )}
         </div>
         <UploadDropzone onFiles={handleUpload} disabled={!targetLang || uploading} />
 
