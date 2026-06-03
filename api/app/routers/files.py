@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from .. import models, video
 from ..db import SessionLocal
+from ..subtitles import merge, srt, vtt
 from ..worker import job_queue, ocr_queue
 
 router = APIRouter(tags=["files"])
@@ -285,6 +286,161 @@ async def retry_ocr(file_id: int, db: Session = Depends(get_db)):
 
     await ocr_queue.put(f.id)
     return _serialize(f)
+
+
+# ---------------------------------------------------------------------------
+# Merge — stitch a "forced" + a "standard" subtitle into one union subtitle.
+# ---------------------------------------------------------------------------
+
+
+async def _load_slot_cues(
+    db: Session,
+    project_id: int,
+    file_id: Optional[int],
+    upload: Optional[UploadFile],
+    used_ids: set[int],
+) -> tuple[list, str, str]:
+    """Resolve one merge slot to (cues, source_stem, source_video_path).
+
+    A slot is EITHER an existing project file (`file_id`) OR a freshly uploaded
+    `.srt`/`.vtt` (`upload`) — exactly one. Uploaded bytes are merge-only inputs
+    and never create their own File row (so they don't get auto-translated like
+    a normal dropzone upload would).
+    """
+    has_id = file_id is not None
+    has_upload = upload is not None and bool(upload.filename)
+    if has_id == has_upload:
+        raise HTTPException(
+            400, "Each merge slot needs exactly one of an existing file or an upload"
+        )
+
+    if has_id:
+        if file_id in used_ids:
+            raise HTTPException(400, "Pick two different files to merge")
+        used_ids.add(file_id)
+        row = db.get(models.File, file_id)
+        if not row or row.project_id != project_id:
+            raise HTTPException(404, f"File {file_id} not found in this project")
+        if row.format not in ("srt", "vtt"):
+            raise HTTPException(
+                409,
+                f"File {file_id} is {row.format!r} — only text (srt/vtt) "
+                "subtitles can be merged; finish OCR first if it's a bitmap track",
+            )
+        if not row.stored_original_path or not os.path.exists(row.stored_original_path):
+            raise HTTPException(400, f"File {file_id} has no source file on disk")
+        content = Path(row.stored_original_path).read_text(
+            encoding="utf-8-sig", errors="replace"
+        )
+        fmt = row.format
+        stem = Path(row.original_filename).stem
+        src_video = row.source_video_path or ""
+    else:
+        ext = _ext_of(upload.filename or "")
+        if ext not in ALLOWED_EXTS:
+            raise HTTPException(400, f"Unsupported extension: {upload.filename!r}")
+        data = await upload.read()
+        if len(data) > MAX_SIZE:
+            raise HTTPException(400, f"File too large (max 5 MB): {upload.filename!r}")
+        if not data:
+            raise HTTPException(400, f"File is empty: {upload.filename!r}")
+        content = data.decode("utf-8-sig", errors="replace")
+        fmt = ext
+        stem = Path(upload.filename or f"upload.{ext}").stem
+        src_video = ""
+
+    cues = srt.parse_srt(content) if fmt == "srt" else vtt.parse_vtt(content)
+    if not cues:
+        raise HTTPException(400, "No cues found in one of the files")
+    return cues, stem, src_video
+
+
+@router.post("/projects/{project_id}/merge/preview")
+async def merge_preview(
+    project_id: int,
+    file_id_a: Optional[int] = Form(None),
+    file_id_b: Optional[int] = Form(None),
+    upload_a: Optional[UploadFile] = File(None),
+    upload_b: Optional[UploadFile] = File(None),
+    db: Session = Depends(get_db),
+):
+    """Overlap report for two subtitle slots — creates nothing on disk or in DB."""
+    proj = db.get(models.Project, project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+
+    used: set[int] = set()
+    cues_a, stem_a, _va = await _load_slot_cues(db, project_id, file_id_a, upload_a, used)
+    cues_b, stem_b, _vb = await _load_slot_cues(db, project_id, file_id_b, upload_b, used)
+
+    out = merge.report_to_dict(merge.analyze(cues_a, cues_b))
+    out["default_name"] = merge.default_name(stem_a, stem_b)
+    return out
+
+
+@router.post("/projects/{project_id}/merge", status_code=201)
+async def merge_commit(
+    project_id: int,
+    file_id_a: Optional[int] = Form(None),
+    file_id_b: Optional[int] = Form(None),
+    upload_a: Optional[UploadFile] = File(None),
+    upload_b: Optional[UploadFile] = File(None),
+    output_name: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+):
+    """Merge two subtitle slots into one SRT row at status `extracted`.
+
+    The merged row behaves exactly like a freshly-extracted text track: it rests
+    until the operator clicks Translate. `source_format="merged"` lets the UI
+    label it; no auto-queue, no new pipeline state.
+    """
+    proj = db.get(models.Project, project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+
+    used: set[int] = set()
+    cues_a, stem_a, vid_a = await _load_slot_cues(db, project_id, file_id_a, upload_a, used)
+    cues_b, stem_b, vid_b = await _load_slot_cues(db, project_id, file_id_b, upload_b, used)
+
+    report = merge.analyze(cues_a, cues_b)
+    merged_cues = merge.combine(cues_a, cues_b)
+
+    requested = (output_name or "").strip()
+    if requested.endswith(".srt"):
+        requested = requested[:-4]
+    stem = _validate_rename_stem(requested) if requested else merge.default_name(stem_a, stem_b)
+
+    # Carry the source video only when both slots came from the *same* video, so
+    # the "export next to source video" flow still has an unambiguous target.
+    src_video = vid_a if (vid_a and vid_a == vid_b) else ""
+
+    # Mirror upload_files' ordering for atomicity: flush to get the id, write the
+    # file using that id, then commit — a failed write aborts before commit.
+    row = models.File(
+        project_id=project_id,
+        original_filename=f"{stem}.srt",
+        format="srt",
+        target_lang="",
+        model="",
+        status="extracted",
+        progress_pct=100,
+        stored_original_path="",
+        source_video_path=src_video,
+        source_format="merged",
+    )
+    db.add(row)
+    db.flush()  # assign id
+
+    out_path = _project_dir(project_id) / f"{row.id}_{stem}.srt"
+    out_path.write_text(srt.write_srt(merged_cues), encoding="utf-8")
+    row.stored_original_path = str(out_path)
+    db.commit()
+    db.refresh(row)
+
+    result = _serialize(row)
+    result["overlap_count"] = report.overlap_count
+    result["result_cues"] = report.result_cues
+    return result
 
 
 @router.get("/files/{file_id}/download")

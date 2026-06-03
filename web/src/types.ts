@@ -127,3 +127,32 @@ export interface ExportResult {
   written: ExportItem[]
   skipped: ExportItem[]
 }
+
+// One run of >=2 overlapping cues that the merge will fuse into a single cue.
+export interface MergeOverlap {
+  start: string // SRT timestamp HH:MM:SS,mmm
+  end: string
+  count: number // how many source cues were fused
+  long: boolean // flagged when the fuse is unusually wide (possible over-merge)
+  texts: string[] // the member cue texts, in start order
+}
+
+// Returned by POST /projects/:id/merge/preview — describes what merging the two
+// chosen subtitle slots would produce, without creating anything.
+export interface MergeReport {
+  forced_cues: number
+  full_cues: number
+  overlap_count: number // number of combined clusters (0 == clean union)
+  result_cues: number // cue count of the merged output
+  clean: boolean // true when the two tracks don't overlap at all
+  long_combined: number // how many combined clusters tripped the over-merge warning
+  truncated: number // combined clusters omitted from `combined`
+  combined: MergeOverlap[] // capped sample of the overlaps for display
+  default_name: string // suggested output base name (no extension)
+}
+
+// Commit response = the new SubtitleFile row plus a tiny overlap summary.
+export interface MergeResult extends SubtitleFile {
+  overlap_count: number
+  result_cues: number
+}

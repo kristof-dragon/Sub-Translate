@@ -3,6 +3,8 @@ import type {
   BrowseResponse,
   ExportResult,
   Language,
+  MergeReport,
+  MergeResult,
   OllamaHealth,
   OllamaModel,
   Project,
@@ -82,6 +84,26 @@ export const api = {
 
   retryOcr: (fid: number) =>
     request<SubtitleFile>(`/files/${fid}/ocr`, { method: 'POST' }),
+
+  // Merge two subtitle slots. `form` carries file_id_a/file_id_b (existing rows)
+  // and/or upload_a/upload_b (fresh files) — exactly one per slot — built by the
+  // MergeSubtitles overlay. Preview creates nothing; commit creates the row.
+  mergePreview: async (pid: number, form: FormData): Promise<MergeReport> => {
+    const res = await fetch(`${BASE}/projects/${pid}/merge/preview`, {
+      method: 'POST',
+      body: form,
+    })
+    if (!res.ok) throw new Error((await res.text()) || res.statusText)
+    return res.json()
+  },
+  mergeCommit: async (pid: number, form: FormData): Promise<MergeResult> => {
+    const res = await fetch(`${BASE}/projects/${pid}/merge`, {
+      method: 'POST',
+      body: form,
+    })
+    if (!res.ok) throw new Error((await res.text()) || res.statusText)
+    return res.json()
+  },
 
   renameFile: (fid: number, stem: string) =>
     request<SubtitleFile>(`/files/${fid}/rename`, jsonInit('PATCH', { stem })),

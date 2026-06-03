@@ -4,11 +4,13 @@ import { api } from '../api'
 import VideoBrowser from '../components/VideoBrowser'
 import FolderPicker from '../components/FolderPicker'
 import UploadDropzone from '../components/UploadDropzone'
+import MergeSubtitles from '../components/MergeSubtitles'
 import type {
   AppSettings,
   EventMessage,
   ExportResult,
   Language,
+  MergeResult,
   OllamaModel,
   Project,
   SubtitleFile,
@@ -44,8 +46,16 @@ export default function ProjectDetail() {
   const [err, setErr] = useState('')
   const [uploading, setUploading] = useState(false)
   const [videoOpen, setVideoOpen] = useState(false)
+  const [mergeOpen, setMergeOpen] = useState(false)
+  const [mergeNotice, setMergeNotice] = useState('')
   const [savingDefaults, setSavingDefaults] = useState(false)
   const [savedDefaults, setSavedDefaults] = useState(false)
+
+  // Inline project-name editor (header pencil), mirroring FileRow's rename UI.
+  const [editingName, setEditingName] = useState(false)
+  const [nameDraft, setNameDraft] = useState('')
+  const [savingName, setSavingName] = useState(false)
+  const [nameErr, setNameErr] = useState('')
 
   // Bulk-export state: file ids ticked for export + the active phase.
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
@@ -314,6 +324,51 @@ export default function ProjectDetail() {
     }
   }
 
+  const handleMergeDone = (created: MergeResult) => {
+    setMergeOpen(false)
+    setErr('')
+    setMergeNotice(
+      `Merged into ${created.original_filename} — ${created.result_cues} cues` +
+        (created.overlap_count > 0
+          ? `, ${created.overlap_count} overlap${
+              created.overlap_count === 1 ? '' : 's'
+            } combined`
+          : '') +
+        '. Click Translate on the new row.',
+    )
+    reload()
+    setTimeout(() => setMergeNotice(''), 8000)
+  }
+
+  const startEditingName = () => {
+    setNameDraft(project?.name || '')
+    setNameErr('')
+    setEditingName(true)
+  }
+
+  const saveName = async () => {
+    const trimmed = nameDraft.trim()
+    if (!trimmed) {
+      setNameErr('Name cannot be empty')
+      return
+    }
+    if (trimmed === project?.name) {
+      setEditingName(false)
+      return
+    }
+    setSavingName(true)
+    setNameErr('')
+    try {
+      const updated = await api.updateProject(projectId, { name: trimmed })
+      setProject(updated)
+      setEditingName(false)
+    } catch (e: unknown) {
+      setNameErr(String(e))
+    } finally {
+      setSavingName(false)
+    }
+  }
+
   const handleTranslate = async (fid: number) => {
     if (!targetLang) {
       setErr('Pick a target language at the top of the page first')
@@ -346,7 +401,56 @@ export default function ProjectDetail() {
       </div>
 
       <div className="row between">
-        <h2 style={{ margin: 0 }}>{project.name}</h2>
+        {editingName ? (
+          <div className="stack" style={{ gap: 4, flex: 1 }}>
+            <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+              <input
+                value={nameDraft}
+                onChange={(e) => setNameDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void saveName()
+                  if (e.key === 'Escape') setEditingName(false)
+                }}
+                autoFocus
+                disabled={savingName}
+                aria-label="Project name"
+                style={{ fontSize: '1.2rem', fontWeight: 600 }}
+              />
+              <button
+                type="button"
+                className="small primary"
+                onClick={saveName}
+                disabled={savingName}
+              >
+                {savingName ? 'Saving…' : 'Save'}
+              </button>
+              <button
+                type="button"
+                className="small"
+                onClick={() => setEditingName(false)}
+                disabled={savingName}
+              >
+                Cancel
+              </button>
+            </div>
+            {nameErr && (
+              <div className="small" style={{ color: 'var(--error)' }}>{nameErr}</div>
+            )}
+          </div>
+        ) : (
+          <h2 className="row" style={{ margin: 0, gap: 8, alignItems: 'center' }}>
+            {project.name}
+            <button
+              type="button"
+              className="icon-button"
+              onClick={startEditingName}
+              title="Rename project"
+              aria-label="Rename project"
+            >
+              &#9998;
+            </button>
+          </h2>
+        )}
       </div>
       {project.description && <div className="muted">{project.description}</div>}
 
@@ -396,6 +500,17 @@ export default function ProjectDetail() {
             subtitle tracks. Translate them afterwards from the file list.
           </span>
         </div>
+
+        <div className="row" style={{ marginTop: 8 }}>
+          <button onClick={() => setMergeOpen(true)}>Merge subtitles…</button>
+          <span className="small muted">
+            Stitch a “forced” track and a “standard”/full track into one union
+            subtitle, then translate the result.
+          </span>
+        </div>
+        {mergeNotice && (
+          <div className="small" style={{ color: 'var(--success)' }}>{mergeNotice}</div>
+        )}
       </div>
 
       {videoOpen && (
@@ -413,6 +528,15 @@ export default function ProjectDetail() {
             // SSE will update the file list live as extractions finish.
             await reload()
           }}
+        />
+      )}
+
+      {mergeOpen && (
+        <MergeSubtitles
+          projectId={projectId}
+          files={files}
+          onCancel={() => setMergeOpen(false)}
+          onDone={handleMergeDone}
         />
       )}
 
@@ -750,6 +874,11 @@ function FileRow({
           ) : (
             <div className="file-row-name-line">
               <span>{displayName}</span>
+              {f.source_format === 'merged' && (
+                <span className="small muted" title="Created by merging two subtitles">
+                  · merged
+                </span>
+              )}
               {canRename && (
                 <button
                   type="button"

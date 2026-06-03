@@ -29,7 +29,9 @@ class ProjectIn(BaseModel):
 
 
 class ProjectPatch(BaseModel):
-    name: Optional[str] = None
+    # Same length bounds as ProjectIn — `None` still means "leave unchanged", but
+    # an explicit empty/blank name is rejected rather than silently clearing it.
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     description: Optional[str] = None
     default_target_lang: Optional[str] = None
     default_model: Optional[str] = None
@@ -81,8 +83,13 @@ def update_project(project_id: int, data: ProjectPatch, db: Session = Depends(ge
     if not p:
         raise HTTPException(404, "Project not found")
     for k, v in data.model_dump(exclude_unset=True).items():
-        if v is not None:
-            setattr(p, k, v)
+        if v is None:
+            continue
+        if k == "name":
+            v = v.strip()
+            if not v:
+                raise HTTPException(400, "Name cannot be empty")
+        setattr(p, k, v)
     db.commit()
     db.refresh(p)
     return _serialize(p)

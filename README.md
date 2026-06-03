@@ -13,6 +13,10 @@ Ollama LLM backend. No login, intended for internal LAN use only.
   `.mkv` / `.mp4` / `.webm` / etc., tick the subtitle tracks to extract.
   Bundled `ffmpeg` / `ffprobe` in the api container handle the demux.
   Extracted tracks land in the project and can then be translated on demand.
+- **Merge two subtitles** into one union (e.g. a "forced" foreign-dialogue
+  track + the "standard"/full track). Each input is an existing project file or
+  a fresh upload; an overlap report is shown first, overlapping cues are
+  combined, and the result lands as a normal SRT row ready to translate.
 - **MKVToolNix GUI** (jlesage/mkvtoolnix) runs as a sidecar on port 5800 for
   interactive edits when the in-app picker isn't enough. Linked from the
   drawer's "Tools" section.
@@ -104,6 +108,34 @@ npm run dev
 ```
 
 ## Changelog
+
+### v1.6.0
+
+> ⚠️ **Verification status:** the merge core is covered by unit tests
+> (`api/tests/test_merge.py`) and the API + web both build, but the
+> end-to-end `/merge` → translate path has not yet been smoke-tested in
+> Docker against a real forced + full subtitle pair. Treat as "ready to
+> try" until that lands, consistent with the v1.4/v1.5 caveats.
+
+- **Merge subtitles** — a new **Merge subtitles…** overlay stitches a
+  "forced" (foreign-dialogue-only) track and a "standard"/full track into a
+  single union SRT *before* translation. Each of the two slots is either an
+  existing project file (`srt`/`vtt`, extracted or uploaded) or a fresh upload.
+  - **Overlap is surfaced, never silent.** A **Check overlap** step reports
+    cue counts and any time collisions; the commit always previews first, so a
+    colliding pair shows an unmissable warning and the button becomes
+    *"Create anyway — combine N overlap(s)"*. Overlapping cues are combined
+    into one cue spanning both ranges (exact-duplicate lines de-duplicated for
+    the "the full track already contains the forced line" case); unusually wide
+    fuses are flagged as possible over-merges.
+  - The merged row lands at `status="extracted"` with
+    `source_format="merged"` and is translated via the existing **Translate**
+    button — no new pipeline state, **no DB migration**, no new dependency.
+  - Backend: pure-stdlib `api/app/subtitles/merge.py` +
+    `POST /api/projects/{id}/merge/preview` and `POST /api/projects/{id}/merge`.
+- **Edit a project's name** — inline pencil editor in the project header
+  (reuses the file-rename UI pattern). Blank names are rejected by the
+  `PATCH /projects/{id}` guard.
 
 ### v1.5.0
 
