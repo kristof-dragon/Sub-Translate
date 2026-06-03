@@ -131,6 +131,15 @@ export interface ExportResult {
   skipped: ExportItem[]
 }
 
+// Which on-disk file to export for a row. 'source' covers both the plain
+// "Original" extracted/uploaded subtitle and a merged row's "Unified" file.
+export type ExportVersion = 'translated' | 'source'
+
+export interface ExportRequestItem {
+  file_id: number
+  version: ExportVersion
+}
+
 // One cue inside an overlap clash, tagged with which track it came from.
 export interface MergeMember {
   track: 'forced' | 'full'

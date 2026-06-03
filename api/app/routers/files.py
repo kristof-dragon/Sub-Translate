@@ -575,24 +575,34 @@ def rename_translated(
 # Export — copy translated files into the bind-mounted media folder.
 # ---------------------------------------------------------------------------
 
+class ExportItemIn(BaseModel):
+    file_id: int
+    # Which on-disk file to export for this row:
+    #   "translated" → stored_translated_path (requires a finished translation)
+    #   "source"     → stored_original_path (the extracted / uploaded / *merged
+    #                  unified* subtitle — exportable even before translation)
+    version: str = "translated"
+
+
 class ExportIn(BaseModel):
-    file_ids: list[int] = Field(min_length=1)
-    # When None every selected file must have a `source_video_path` — the
-    # translation is written alongside its source video. When set, it must
-    # resolve to an existing directory inside the media root and every
-    # translation goes there, regardless of origin.
+    items: list[ExportItemIn] = Field(min_length=1)
+    # When None every item must have a `source_video_path` — the file is written
+    # alongside its source video. When set, it must resolve to an existing
+    # directory inside the media root and every file goes there.
     target: Optional[str] = None
 
 
-def _export_filename(row: models.File) -> str:
-    """Output filename for `row` on export — strips the internal `{id}_` prefix.
+def _export_filename(row: models.File, version: str) -> str:
+    """Output filename for `row`/`version` on export — strips the `{id}_` prefix.
 
-    The `{id}_` prefix only exists on disk to keep `/data/translated/<pid>/`
-    collision-free when multiple files in the same project share a stem. Out
-    in the media folder there's no such concern, and the prefix would ruin
-    Plex/Jellyfin auto-detection of the matching video.
+    The `{id}_` prefix only exists on disk to keep the per-project folders
+    collision-free; out in the media folder it would ruin Plex/Jellyfin
+    auto-detection. We derive the name from the *actual file being exported*
+    (not `original_filename`) so an OCR'd source exports as `.srt`, not the
+    stale `.sup` the row is still named after.
     """
-    current_name = Path(row.stored_translated_path).name
+    path = row.stored_translated_path if version == "translated" else row.stored_original_path
+    current_name = Path(path).name
     prefix = f"{row.id}_"
     return current_name[len(prefix):] if current_name.startswith(prefix) else current_name
 
@@ -611,22 +621,28 @@ def export_files(
     data: ExportIn,
     db: Session = Depends(get_db),
 ):
-    """Copy translated files out to the media folder.
+    """Copy subtitle files out to the media folder.
 
-    Two modes, selected by the `target` field:
-      - target=null → "put back next to source video". Requires every file
-        to have `source_video_path` set (i.e. originated from the extraction
-        flow). Each translation lands in its video's folder.
-      - target=<media-relative path> → "pick one folder". Every translation
-        lands in that folder, regardless of origin.
+    Each item names a row and a `version` ("translated" or "source"). The
+    destination is chosen by `target`:
+      - target=null → "put back next to source video". Each item lands in its
+        video's folder; an item without `source_video_path` is skipped.
+      - target=<media-relative path> → "pick one folder". Every item goes there.
 
-    Existing files at the destination are skipped with a `reason="exists"`
-    entry on the response rather than overwritten — callers that want
-    clobber semantics can delete first and retry.
+    `version="source"` exports the extracted / uploaded / *merged unified*
+    subtitle and does NOT require a finished translation — only that the source
+    file exists on disk. Existing files at the destination are skipped (no
+    overwrite) rather than clobbered.
     """
     proj = db.get(models.Project, project_id)
     if not proj:
         raise HTTPException(404, "Project not found")
+
+    version_by_id: dict[int, str] = {}
+    for it in data.items:
+        if it.version not in ("translated", "source"):
+            raise HTTPException(400, f"Unknown version {it.version!r} for file {it.file_id}")
+        version_by_id[it.file_id] = it.version
 
     explicit_target: Optional[Path] = None
     if data.target is not None:
@@ -641,35 +657,43 @@ def export_files(
         db.query(models.File)
         .filter(
             models.File.project_id == project_id,
-            models.File.id.in_(data.file_ids),
+            models.File.id.in_(list(version_by_id.keys())),
         )
         .all()
     )
     found_ids = {r.id for r in rows}
-    missing = [fid for fid in data.file_ids if fid not in found_ids]
+    missing = [fid for fid in version_by_id if fid not in found_ids]
     if missing:
         raise HTTPException(400, f"File IDs not in this project: {missing}")
 
     written: list[dict] = []
     skipped: list[dict] = []
 
+    def skip(row: models.File, reason: str, path: str = "", name: str = "") -> None:
+        skipped.append({
+            "file_id": row.id,
+            "name": name or row.original_filename,
+            "path": path,
+            "reason": reason,
+        })
+
     for row in rows:
-        if row.status != "done":
-            skipped.append({
-                "file_id": row.id,
-                "name": row.original_filename,
-                "path": "",
-                "reason": f"status is {row.status}",
-            })
-            continue
-        if not row.stored_translated_path or not os.path.exists(row.stored_translated_path):
-            skipped.append({
-                "file_id": row.id,
-                "name": row.original_filename,
-                "path": "",
-                "reason": "translated file missing on disk",
-            })
-            continue
+        version = version_by_id[row.id]
+
+        # Resolve the source-of-truth file for the requested version.
+        if version == "translated":
+            src_path = row.stored_translated_path
+            if row.status != "done":
+                skip(row, f"no translation yet (status is {row.status})")
+                continue
+            if not src_path or not os.path.exists(src_path):
+                skip(row, "translated file missing on disk")
+                continue
+        else:  # "source" — the extracted/uploaded/merged subtitle, pre-translation
+            src_path = row.stored_original_path
+            if not src_path or not os.path.exists(src_path):
+                skip(row, "source file missing on disk")
+                continue
 
         # Destination folder: either the picked target, or the source video's folder.
         if explicit_target is not None:
@@ -678,44 +702,24 @@ def export_files(
             try:
                 video_abs = video.resolve_media_path(row.source_video_path)
             except video.MediaPathError as exc:
-                skipped.append({
-                    "file_id": row.id,
-                    "name": row.original_filename,
-                    "path": "",
-                    "reason": f"source video: {exc}",
-                })
+                skip(row, f"source video: {exc}")
                 continue
             dest_dir = video_abs.parent
         else:
-            skipped.append({
-                "file_id": row.id,
-                "name": row.original_filename,
-                "path": "",
-                "reason": "no source video — pick a target folder",
-            })
+            skip(row, "no source video — pick a target folder")
             continue
 
-        out_name = _export_filename(row)
+        out_name = _export_filename(row, version)
         dest_path = dest_dir / out_name
 
         if dest_path.exists():
-            skipped.append({
-                "file_id": row.id,
-                "name": out_name,
-                "path": _relative_to_media(dest_path),
-                "reason": "already exists",
-            })
+            skip(row, "already exists", path=_relative_to_media(dest_path), name=out_name)
             continue
 
         try:
-            shutil.copy2(row.stored_translated_path, dest_path)
+            shutil.copy2(src_path, dest_path)
         except OSError as exc:
-            skipped.append({
-                "file_id": row.id,
-                "name": out_name,
-                "path": _relative_to_media(dest_path),
-                "reason": str(exc),
-            })
+            skip(row, str(exc), path=_relative_to_media(dest_path), name=out_name)
             continue
 
         written.append({

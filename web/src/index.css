@@ -267,7 +267,6 @@ table.file-list { width: 100%; border-collapse: collapse; }
 .file-row {
   display: grid;
   grid-template-columns:
-    28px                /* checkbox */
     minmax(0, 2fr)      /* file name */
     110px               /* status badge */
     90px                /* detected */
@@ -279,38 +278,14 @@ table.file-list { width: 100%; border-collapse: collapse; }
   padding: 8px 10px;
 }
 
-.file-row-checkbox {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.file-row-checkbox input[type='checkbox'] {
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  cursor: pointer;
-}
-.file-row-checkbox input[type='checkbox']:disabled { cursor: not-allowed; }
-
 .file-list-toolbar {
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
   gap: 8px;
-}
-.file-list-toolbar-left {
-  display: flex;
   align-items: center;
-  gap: 10px;
-  flex: 1;
-  min-width: 220px;
-  flex-wrap: wrap;
 }
 .file-list-toolbar-hint { flex: 1; min-width: 180px; }
-
-/* Desktop: the header row has a tri-state master checkbox, so the toolbar
-   button is redundant and hidden. Mobile re-enables it below 700px. */
-.file-list-select-all-mobile { display: none; }
 
 .export-summary-list {
   list-style: none;
@@ -442,7 +417,6 @@ table.file-list { width: 100%; border-collapse: collapse; }
     gap: 12px;
   }
   .file-row-status { flex-shrink: 0; }
-  .file-row-checkbox { flex-shrink: 0; align-self: center; }
   .file-row-name { flex: 1; }
 
   .file-row-meta {
@@ -470,9 +444,6 @@ table.file-list { width: 100%; border-collapse: collapse; }
   /* Tighter main padding so the cards can breathe. */
   .content { padding: 16px 12px; }
 
-  /* Header row (and its master checkbox) is hidden on mobile, so expose
-     the select-all as a toolbar button instead. */
-  .file-list-select-all-mobile { display: inline-flex; }
 }
 
 .dropzone {

@@ -2,34 +2,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api } from '../api'
 import VideoBrowser from '../components/VideoBrowser'
-import FolderPicker from '../components/FolderPicker'
 import UploadDropzone from '../components/UploadDropzone'
 import MergeSubtitles from '../components/MergeSubtitles'
+import ExportSubtitles from '../components/ExportSubtitles'
 import type {
   AppSettings,
   EventMessage,
-  ExportResult,
   Language,
   MergeResult,
   OllamaModel,
   Project,
   SubtitleFile,
 } from '../types'
-
-// The export flow is a small state machine rather than a pile of booleans:
-//   idle     → nothing in progress
-//   picking  → FolderPicker is open because uploaded files need a target
-//   summary  → results dialog is open showing written/skipped items
-type ExportPhase =
-  | { kind: 'idle' }
-  | {
-      kind: 'picking'
-      uploadedIds: number[]
-      carriedResult: ExportResult
-    }
-  | { kind: 'summary'; result: ExportResult }
-
-const EMPTY_RESULT: ExportResult = { written: [], skipped: [] }
 
 export default function ProjectDetail() {
   const { id } = useParams()
@@ -57,10 +41,8 @@ export default function ProjectDetail() {
   const [savingName, setSavingName] = useState(false)
   const [nameErr, setNameErr] = useState('')
 
-  // Bulk-export state: file ids ticked for export + the active phase.
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
-  const [exportPhase, setExportPhase] = useState<ExportPhase>({ kind: 'idle' })
-  const [exporting, setExporting] = useState(false)
+  // Interactive export overlay (replaces the old tick-box bulk export).
+  const [exportOpen, setExportOpen] = useState(false)
 
   // Load project + its files + surrounding context in parallel.
   const reload = useCallback(async () => {
@@ -158,142 +140,6 @@ export default function ProjectDetail() {
   const handleRename = async (fid: number, stem: string) => {
     const updated = await api.renameFile(fid, stem)
     setFiles((rows) => rows.map((r) => (r.id === fid ? updated : r)))
-  }
-
-  const toggleSelected = (fid: number) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(fid)) next.delete(fid)
-      else next.add(fid)
-      return next
-    })
-  }
-
-  // Ids of every row that *could* be ticked — i.e. translation done and the
-  // translated file is actually on disk. Used for the master-checkbox state
-  // and for the select-all toggle.
-  const exportableIds = useMemo(
-    () =>
-      files
-        .filter((f) => f.status === 'done' && f.translated_available)
-        .map((f) => f.id),
-    [files],
-  )
-
-  const exportableCount = useMemo(
-    () => exportableIds.filter((id) => selectedIds.has(id)).length,
-    [exportableIds, selectedIds],
-  )
-
-  // Tri-state master-checkbox indicator for the file-list header:
-  //   'none'  → nothing selectable is ticked
-  //   'some'  → a subset is ticked (renders as indeterminate)
-  //   'all'   → every exportable row is ticked
-  const masterState: 'none' | 'some' | 'all' = useMemo(() => {
-    if (exportableIds.length === 0) return 'none'
-    if (exportableCount === 0) return 'none'
-    if (exportableCount === exportableIds.length) return 'all'
-    return 'some'
-  }, [exportableCount, exportableIds.length])
-
-  const toggleSelectAll = () => {
-    // Clicking the master toggle in any "partial" state promotes to "all"
-    // (matches how most table UIs behave — one click selects everything);
-    // clicking when everything is already ticked clears the selection.
-    if (masterState === 'all') {
-      setSelectedIds(new Set())
-    } else {
-      setSelectedIds(new Set(exportableIds))
-    }
-  }
-
-  const mergeResults = (a: ExportResult, b: ExportResult): ExportResult => ({
-    written: [...a.written, ...b.written],
-    skipped: [...a.skipped, ...b.skipped],
-  })
-
-  const handleExport = async () => {
-    // Filter the selection to files that could actually be exported so we
-    // don't waste a round-trip on a status-is-queued row.
-    const candidates = files.filter(
-      (f) =>
-        selectedIds.has(f.id) && f.status === 'done' && f.translated_available,
-    )
-    if (candidates.length === 0) return
-
-    const extractedIds = candidates
-      .filter((f) => f.source_video_path)
-      .map((f) => f.id)
-    const uploadedIds = candidates
-      .filter((f) => !f.source_video_path)
-      .map((f) => f.id)
-
-    setErr('')
-    setExporting(true)
-    try {
-      let carried: ExportResult = EMPTY_RESULT
-
-      // Extracted-from-video files go back next to each source automatically
-      // (target=null). Do that first so the folder picker only runs if
-      // actually necessary.
-      if (extractedIds.length > 0) {
-        const r = await api.exportFiles(projectId, { file_ids: extractedIds })
-        carried = mergeResults(carried, r)
-      }
-
-      if (uploadedIds.length > 0) {
-        // Hand off to the FolderPicker — the finish handler below will post
-        // the second batch with the picked target and show the combined summary.
-        setExportPhase({
-          kind: 'picking',
-          uploadedIds,
-          carriedResult: carried,
-        })
-      } else {
-        setExportPhase({ kind: 'summary', result: carried })
-        setSelectedIds(new Set())
-      }
-    } catch (e: unknown) {
-      setErr(String(e))
-    } finally {
-      setExporting(false)
-    }
-  }
-
-  const finishExportWithFolder = async (target: string) => {
-    if (exportPhase.kind !== 'picking') return
-    const { uploadedIds, carriedResult } = exportPhase
-    setExporting(true)
-    setErr('')
-    try {
-      const r = await api.exportFiles(projectId, {
-        file_ids: uploadedIds,
-        target,
-      })
-      setExportPhase({
-        kind: 'summary',
-        result: mergeResults(carriedResult, r),
-      })
-      setSelectedIds(new Set())
-    } catch (e: unknown) {
-      setErr(String(e))
-      setExportPhase({ kind: 'idle' })
-    } finally {
-      setExporting(false)
-    }
-  }
-
-  const cancelExportPicker = () => {
-    // If the extracted-files pass already wrote something, keep that in the
-    // summary so the operator knows it wasn't a no-op.
-    if (exportPhase.kind === 'picking') {
-      const result = exportPhase.carriedResult
-      if (result.written.length > 0 || result.skipped.length > 0) {
-        setExportPhase({ kind: 'summary', result })
-      } else {
-        setExportPhase({ kind: 'idle' })
-      }
-    }
   }
 
   const handleRetryOcr = async (fid: number) => {
@@ -545,48 +391,20 @@ export default function ProjectDetail() {
       ) : (
         <div className="card file-list-card">
           <div className="row between file-list-toolbar">
-            <div className="file-list-toolbar-left">
-              {/* Mobile-only select-all — the desktop master checkbox lives
-                  in the hidden-on-mobile .file-list-head row. */}
-              <button
-                type="button"
-                className="small file-list-select-all-mobile"
-                onClick={toggleSelectAll}
-                disabled={exportableIds.length === 0}
-              >
-                {masterState === 'all'
-                  ? 'Clear selection'
-                  : `Select all${
-                      exportableIds.length > 0 ? ` (${exportableIds.length})` : ''
-                    }`}
-              </button>
-              <div className="small muted file-list-toolbar-hint">
-                Tick files to export. Extracted subtitles go next to the
-                source video; uploaded ones prompt for a folder.
-              </div>
+            <div className="small muted file-list-toolbar-hint">
+              Export any subtitle — original, unified, or translated — to the
+              source video's folder, your downloads, or a chosen folder.
             </div>
             <button
               type="button"
               className="primary"
-              onClick={handleExport}
-              disabled={exportableCount === 0 || exporting}
+              onClick={() => setExportOpen(true)}
             >
-              {exporting
-                ? 'Exporting…'
-                : `Export selected${
-                    exportableCount > 0 ? ` (${exportableCount})` : ''
-                  }`}
+              Export subtitles…
             </button>
           </div>
           <div className="file-list">
             <div className="file-list-head">
-              <div className="file-row-checkbox">
-                <MasterCheckbox
-                  state={masterState}
-                  onToggle={toggleSelectAll}
-                  disabled={exportableIds.length === 0}
-                />
-              </div>
               <span>File</span>
               <span>Status</span>
               <span>Detected</span>
@@ -598,8 +416,6 @@ export default function ProjectDetail() {
               <FileRow
                 key={f.id}
                 f={f}
-                selected={selectedIds.has(f.id)}
-                onToggleSelected={toggleSelected}
                 onDelete={handleDelete}
                 onTranslate={handleTranslate}
                 onRetryOcr={handleRetryOcr}
@@ -610,132 +426,25 @@ export default function ProjectDetail() {
         </div>
       )}
 
-      {exportPhase.kind === 'picking' && (
-        <FolderPicker
-          title="Save uploaded subtitles to…"
-          hint="Extracted subtitles are going back next to their source video automatically."
-          onPick={finishExportWithFolder}
-          onCancel={cancelExportPicker}
-        />
-      )}
-
-      {exportPhase.kind === 'summary' && (
-        <ExportSummaryModal
-          result={exportPhase.result}
-          onClose={() => setExportPhase({ kind: 'idle' })}
+      {exportOpen && (
+        <ExportSubtitles
+          projectId={projectId}
+          files={files}
+          onClose={() => setExportOpen(false)}
         />
       )}
     </div>
-  )
-}
-
-function ExportSummaryModal({
-  result,
-  onClose,
-}: {
-  result: ExportResult
-  onClose: () => void
-}) {
-  const { written, skipped } = result
-  return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="row between" style={{ marginBottom: 12 }}>
-          <h3 style={{ margin: 0 }}>Export summary</h3>
-          <button onClick={onClose}>Close</button>
-        </div>
-
-        <div className="small muted" style={{ marginBottom: 8 }}>
-          {written.length} written · {skipped.length} skipped
-        </div>
-
-        {written.length > 0 && (
-          <div style={{ marginBottom: 12 }}>
-            <div className="small" style={{ fontWeight: 600, marginBottom: 4 }}>
-              Written
-            </div>
-            <ul className="export-summary-list">
-              {written.map((w) => (
-                <li key={w.file_id}>
-                  <div>{w.name}</div>
-                  <div className="small muted">/media/{w.path}</div>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {skipped.length > 0 && (
-          <div>
-            <div className="small" style={{ fontWeight: 600, marginBottom: 4 }}>
-              Skipped
-            </div>
-            <ul className="export-summary-list">
-              {skipped.map((s) => (
-                <li key={s.file_id}>
-                  <div>{s.name}</div>
-                  <div className="small muted">
-                    /media/{s.path}
-                    {s.reason ? ` — ${s.reason}` : ''}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {written.length === 0 && skipped.length === 0 && (
-          <div className="empty">Nothing was exported.</div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-// Tri-state checkbox for the file-list header. React has no `indeterminate`
-// prop, so we set the DOM property via ref whenever state changes.
-function MasterCheckbox({
-  state,
-  onToggle,
-  disabled,
-}: {
-  state: 'none' | 'some' | 'all'
-  onToggle: () => void
-  disabled?: boolean
-}) {
-  const ref = useRef<HTMLInputElement>(null)
-  useEffect(() => {
-    if (ref.current) ref.current.indeterminate = state === 'some'
-  }, [state])
-  return (
-    <input
-      ref={ref}
-      type="checkbox"
-      checked={state === 'all'}
-      onChange={onToggle}
-      disabled={disabled}
-      aria-label={
-        state === 'all' ? 'Deselect all files' : 'Select all ready files'
-      }
-      title={
-        state === 'all' ? 'Deselect all' : 'Select all ready for export'
-      }
-    />
   )
 }
 
 function FileRow({
   f,
-  selected,
-  onToggleSelected,
   onDelete,
   onTranslate,
   onRetryOcr,
   onRename,
 }: {
   f: SubtitleFile
-  selected: boolean
-  onToggleSelected: (id: number) => void
   onDelete: (id: number) => void
   onTranslate: (id: number) => void
   onRetryOcr: (id: number) => void
@@ -771,7 +480,6 @@ function FileRow({
   const [renameErr, setRenameErr] = useState('')
 
   const canRename = f.status === 'done' && !!f.translated_filename
-  const exportable = f.status === 'done' && f.translated_available
 
   const startEditing = () => {
     setDraft(currentStem)
@@ -814,24 +522,6 @@ function FileRow({
   return (
     <div className="file-row">
       <div className="file-row-top">
-        <div className="file-row-checkbox">
-          <input
-            type="checkbox"
-            checked={selected}
-            disabled={!exportable}
-            onChange={() => onToggleSelected(f.id)}
-            aria-label={
-              exportable
-                ? `Select ${displayName} for export`
-                : 'Not ready for export'
-            }
-            title={
-              exportable
-                ? 'Include in bulk export'
-                : 'Only done, translated files can be exported'
-            }
-          />
-        </div>
         <div className="file-row-name">
           {editing ? (
             <div className="file-row-rename">

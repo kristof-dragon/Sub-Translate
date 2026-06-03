@@ -134,6 +134,14 @@ npm run dev
   - Backend: pure-stdlib `api/app/subtitles/merge.py` +
     `POST /api/projects/{id}/merge/preview` and `POST /api/projects/{id}/merge`
     (the latter takes `drop_forced` / `drop_full` clash-index lists).
+- **Interactive export** — the old tick-box "Export selected" (which auto-dumped
+  translated files next to the source video) is replaced by a single **Export
+  subtitles…** button that opens an overlay. Per file you pick the **version** —
+  *Original*, *Unified* (a merged row's source), or *Translated* — and the
+  **destination**: next to the source video, **Download**, or a chosen `/media`
+  folder. The un-translated **unified/source** subtitle is now exportable too:
+  `POST /export` takes `items:[{file_id, version}]` and drops the "must be
+  translated" gate for `version:"source"`.
 - **Source-track tag** — rows extracted from a video are tagged in the file
   list with the source subtitle track's name (the title shown in the track
   picker), or `stream N` when the track has no title. Additive

@@ -1,6 +1,7 @@
 import type {
   AppSettings,
   BrowseResponse,
+  ExportRequestItem,
   ExportResult,
   Language,
   MergeReport,
@@ -46,6 +47,7 @@ export const api = {
   getFile: (id: number) => request<SubtitleFile>(`/files/${id}`),
   deleteFile: (id: number) => request<void>(`/files/${id}`, { method: 'DELETE' }),
   downloadUrl: (id: number) => `${BASE}/files/${id}/download`,
+  originalDownloadUrl: (id: number) => `${BASE}/files/${id}/download/original`,
 
   uploadFiles: async (
     pid: number,
@@ -110,7 +112,7 @@ export const api = {
 
   exportFiles: (
     pid: number,
-    body: { file_ids: number[]; target?: string },
+    body: { items: ExportRequestItem[]; target?: string },
   ) =>
     request<ExportResult>(
       `/projects/${pid}/export`,
