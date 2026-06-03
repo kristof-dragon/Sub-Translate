@@ -138,3 +138,59 @@ def test_default_name_uses_common_prefix_and_merged_suffix():
 def test_default_name_falls_back_when_no_common_prefix():
     assert default_name("aaa", "bbb").endswith(".merged")
     assert default_name("", "") == "merged.merged"
+
+
+# --- per-clash keep/drop (the two-tick UI) ----------------------------------
+
+def test_report_members_carry_track_labels():
+    forced = [cue("00:00:01,000", "00:00:04,000", "Bonjour")]
+    full = [cue("00:00:02,000", "00:00:05,000", "Hello")]
+    members = analyze(forced, full).combined[0].members
+    assert {m.track for m in members} == {"forced", "full"}
+    by_track = {m.track: m.text for m in members}
+    assert by_track == {"forced": "Bonjour", "full": "Hello"}
+
+
+def test_drop_full_keeps_forced_only_with_original_timing():
+    forced = [cue("00:00:01,000", "00:00:04,000", "Bonjour")]
+    full = [cue("00:00:02,000", "00:00:05,000", "Hello")]
+    merged = combine(forced, full, drop_full={0})
+    assert len(merged) == 1
+    assert merged[0].text == "Bonjour"
+    assert merged[0].start == "00:00:01,000"
+    assert merged[0].end == "00:00:04,000"  # forced's own timing, not the fused span
+
+
+def test_drop_forced_keeps_full_only():
+    forced = [cue("00:00:01,000", "00:00:04,000", "Bonjour")]
+    full = [cue("00:00:02,000", "00:00:05,000", "Hello")]
+    merged = combine(forced, full, drop_forced={0})
+    assert [c.text for c in merged] == ["Hello"]
+    assert merged[0].start == "00:00:02,000"
+
+
+def test_drop_both_removes_clash_entirely():
+    forced = [cue("00:00:01,000", "00:00:04,000", "Bonjour")]
+    full = [cue("00:00:02,000", "00:00:05,000", "Hello")]
+    assert combine(forced, full, drop_forced={0}, drop_full={0}) == []
+
+
+def test_drop_indexes_only_the_named_clash():
+    forced = [
+        cue("00:00:01,000", "00:00:03,000", "F0"),
+        cue("00:00:10,000", "00:00:12,000", "F1"),
+    ]
+    full = [
+        cue("00:00:02,000", "00:00:04,000", "U0"),
+        cue("00:00:11,000", "00:00:13,000", "U1"),
+    ]
+    # clash 0 = F0/U0, clash 1 = F1/U1. Drop forced on clash 0 only.
+    merged = combine(forced, full, drop_forced={0})
+    assert [c.text for c in merged] == ["U0", "F1\nU1"]
+
+
+def test_drops_are_noops_when_there_is_no_overlap():
+    forced = [cue("00:00:10,000", "00:00:12,000", "lonely forced")]
+    full = [cue("00:00:01,000", "00:00:03,000", "lonely full")]
+    merged = combine(forced, full, drop_forced={0}, drop_full={0})
+    assert [c.text for c in merged] == ["lonely full", "lonely forced"]

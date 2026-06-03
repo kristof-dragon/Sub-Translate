@@ -1,6 +1,7 @@
 """File upload, status lookup, download, delete."""
 from __future__ import annotations
 
+import json
 import os
 import shutil
 from pathlib import Path
@@ -296,6 +297,26 @@ async def retry_ocr(file_id: int, db: Session = Depends(get_db)):
 # ---------------------------------------------------------------------------
 
 
+def _parse_index_set(raw: Optional[str], field: str) -> set[int]:
+    """Parse a JSON array of non-negative ints (overlap-cluster indices).
+
+    None / "" / "[]" all mean "empty set". Anything else that isn't a list of
+    ints is a 400 so a malformed client payload fails loudly rather than being
+    silently ignored (which would merge the wrong cues).
+    """
+    if not raw:
+        return set()
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(400, f"{field} must be a JSON array of integers") from exc
+    if not isinstance(data, list) or not all(
+        isinstance(x, int) and not isinstance(x, bool) and x >= 0 for x in data
+    ):
+        raise HTTPException(400, f"{field} must be a JSON array of non-negative integers")
+    return set(data)
+
+
 async def _load_slot_cues(
     db: Session,
     project_id: int,
@@ -389,6 +410,11 @@ async def merge_commit(
     upload_a: Optional[UploadFile] = File(None),
     upload_b: Optional[UploadFile] = File(None),
     output_name: Optional[str] = Form(None),
+    # JSON arrays of 0-based overlap-cluster indices whose forced / full side the
+    # operator unticked in the overlap report. Empty/omitted = keep everything
+    # (combine all clashes), i.e. the default behaviour.
+    drop_forced: Optional[str] = Form(None),
+    drop_full: Optional[str] = Form(None),
     db: Session = Depends(get_db),
 ):
     """Merge two subtitle slots into one SRT row at status `extracted`.
@@ -406,7 +432,12 @@ async def merge_commit(
     cues_b, stem_b, vid_b = await _load_slot_cues(db, project_id, file_id_b, upload_b, used)
 
     report = merge.analyze(cues_a, cues_b)
-    merged_cues = merge.combine(cues_a, cues_b)
+    merged_cues = merge.combine(
+        cues_a,
+        cues_b,
+        drop_forced=_parse_index_set(drop_forced, "drop_forced"),
+        drop_full=_parse_index_set(drop_full, "drop_full"),
+    )
 
     requested = (output_name or "").strip()
     if requested.endswith(".srt"):

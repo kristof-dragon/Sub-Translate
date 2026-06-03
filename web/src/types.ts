@@ -131,13 +131,21 @@ export interface ExportResult {
   skipped: ExportItem[]
 }
 
-// One run of >=2 overlapping cues that the merge will fuse into a single cue.
-export interface MergeOverlap {
+// One cue inside an overlap clash, tagged with which track it came from.
+export interface MergeMember {
+  track: 'forced' | 'full'
+  text: string
   start: string // SRT timestamp HH:MM:SS,mmm
   end: string
-  count: number // how many source cues were fused
-  long: boolean // flagged when the fuse is unusually wide (possible over-merge)
-  texts: string[] // the member cue texts, in start order
+}
+
+// One run of >=2 overlapping cues (a "clash") the operator can resolve per side.
+export interface MergeOverlap {
+  start: string // SRT timestamp HH:MM:SS,mmm — span of the whole clash
+  end: string
+  count: number // how many source cues overlap here
+  long: boolean // flagged when the span is unusually wide (possible over-merge)
+  members: MergeMember[] // the overlapping cues, each tagged forced/full
 }
 
 // Returned by POST /projects/:id/merge/preview — describes what merging the two

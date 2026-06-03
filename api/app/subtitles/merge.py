@@ -70,13 +70,27 @@ class _Timed:
 
 
 @dataclass
+class ClusterMember:
+    """One source cue inside an overlap cluster, tagged with its track."""
+
+    track: str  # "forced" | "full"
+    text: str
+    start_ms: int
+    end_ms: int
+
+
+@dataclass
 class CombinedCluster:
-    """One run of >=2 source cues that overlapped and got fused into a single cue."""
+    """One run of >=2 source cues that overlap in time (a "clash").
+
+    `members` carries each cue with its track so the UI can show the forced and
+    full sides separately and let the operator keep either, both, or none.
+    """
 
     start_ms: int
     end_ms: int
-    texts: list[str]  # member cue texts, in start order, after de-duplication
-    count: int        # number of source cues fused
+    members: list[ClusterMember]  # in start order
+    count: int                    # == len(members)
 
     @property
     def long(self) -> bool:
@@ -156,21 +170,61 @@ def _dedup_join(texts: list[str]) -> str:
     return "\n".join(kept)
 
 
-def combine(a: list[Cue], b: list[Cue], tolerance_ms: int = 0) -> list[Cue]:
-    """Merge two cue lists into one union list, combining overlaps.
+def combine(
+    a: list[Cue],
+    b: list[Cue],
+    tolerance_ms: int = 0,
+    drop_forced: frozenset[int] | set[int] = frozenset(),
+    drop_full: frozenset[int] | set[int] = frozenset(),
+) -> list[Cue]:
+    """Merge two cue lists into one union list.
 
-    Indices are placeholder (1..N) — srt.write_srt re-numbers on output anyway.
+    Non-overlapping cues always pass through. For each overlap cluster ("clash"),
+    the operator's per-side choice applies, keyed by the cluster's 0-based index
+    among overlap clusters (the same order `analyze` reports them in):
+      - keep both (default)  -> fuse the cluster into one cue (texts joined, dups
+        dropped);
+      - keep one side only   -> emit that side's cues unchanged (original timing);
+      - keep neither         -> drop the clash entirely.
+    `drop_forced` / `drop_full` hold the overlap-indices whose forced / full side
+    the operator unticked.
+
+    Output ordering is preserved (clusters are non-overlapping and start-ordered).
+    `write_srt` re-numbers on output, so indices here are placeholders.
     """
     out: list[Cue] = []
-    for idx, cl in enumerate(_cluster(a, b, tolerance_ms), start=1):
+    overlap_idx = -1
+    for cl in _cluster(a, b, tolerance_ms):
         if len(cl) == 1:
             c = cl[0].cue
-            out.append(Cue(index=idx, start=c.start, end=c.end, text=c.text))
-        else:
+            out.append(Cue(index=0, start=c.start, end=c.end, text=c.text))
+            continue
+
+        overlap_idx += 1
+        keep_forced = overlap_idx not in drop_forced
+        keep_full = overlap_idx not in drop_full
+
+        kept = [
+            t for t in cl
+            if (t.track == "forced" and keep_forced) or (t.track == "full" and keep_full)
+        ]
+        if not kept:
+            continue  # whole clash excluded
+
+        if keep_forced and keep_full:
+            # Both sides kept -> fuse the cluster into a single cue.
             start = min(t.start_ms for t in cl)
             end = max(t.end_ms for t in cl)
             text = _dedup_join([t.cue.text for t in cl])
-            out.append(Cue(index=idx, start=srt_ts(start), end=srt_ts(end), text=text))
+            out.append(Cue(index=0, start=srt_ts(start), end=srt_ts(end), text=text))
+        else:
+            # One side only -> keep those cues as-is (no fusing).
+            for t in kept:
+                c = t.cue
+                out.append(Cue(index=0, start=c.start, end=c.end, text=c.text))
+
+    for i, c in enumerate(out, start=1):
+        c.index = i
     return out
 
 
@@ -190,7 +244,15 @@ def analyze(
             CombinedCluster(
                 start_ms=min(t.start_ms for t in cl),
                 end_ms=max(t.end_ms for t in cl),
-                texts=[t.cue.text for t in cl],
+                members=[
+                    ClusterMember(
+                        track=t.track,
+                        text=t.cue.text,
+                        start_ms=t.start_ms,
+                        end_ms=t.end_ms,
+                    )
+                    for t in cl
+                ],
                 count=len(cl),
             )
         )
@@ -230,7 +292,15 @@ def report_to_dict(r: MergeReport) -> dict:
                 "end": srt_ts(c.end_ms),
                 "count": c.count,
                 "long": c.long,
-                "texts": c.texts,
+                "members": [
+                    {
+                        "track": m.track,
+                        "text": m.text,
+                        "start": srt_ts(m.start_ms),
+                        "end": srt_ts(m.end_ms),
+                    }
+                    for m in c.members
+                ],
             }
             for c in r.combined
         ],

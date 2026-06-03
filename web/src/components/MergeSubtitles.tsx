@@ -43,14 +43,36 @@ export default function MergeSubtitles({ projectId, files, onCancel, onDone }: P
 
   const [outputName, setOutputName] = useState('')
   const [report, setReport] = useState<MergeReport | null>(null)
+  // Per-clash, per-side exclusions, keyed by the clash's index in
+  // report.combined. Empty = keep everything (combine every clash) = default.
+  const [dropForced, setDropForced] = useState<Set<number>>(new Set())
+  const [dropFull, setDropFull] = useState<Set<number>>(new Set())
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
 
-  // Any change to the inputs invalidates a previously-shown overlap report, so
-  // the operator can't confirm a merge against a stale collision count.
+  // Any change to the inputs invalidates a previously-shown report (and the
+  // per-clash choices made against it), so the operator can't confirm a merge
+  // against a stale collision list.
   useEffect(() => {
     setReport(null)
+    setDropForced(new Set())
+    setDropFull(new Set())
   }, [modeA, fileIdA, uploadA, modeB, fileIdB, uploadB])
+
+  const toggleForced = (idx: number) =>
+    setDropForced((prev) => {
+      const next = new Set(prev)
+      if (next.has(idx)) next.delete(idx)
+      else next.add(idx)
+      return next
+    })
+  const toggleFull = (idx: number) =>
+    setDropFull((prev) => {
+      const next = new Set(prev)
+      if (next.has(idx)) next.delete(idx)
+      else next.add(idx)
+      return next
+    })
 
   const appendSlot = (
     fd: FormData,
@@ -94,6 +116,9 @@ export default function MergeSubtitles({ projectId, files, onCancel, onDone }: P
     try {
       const rep = await api.mergePreview(projectId, fd)
       setReport(rep)
+      // Fresh report -> start with every clash kept (all ticked).
+      setDropForced(new Set())
+      setDropFull(new Set())
       if (!outputName.trim()) setOutputName(rep.default_name)
       return rep
     } catch (e: unknown) {
@@ -118,6 +143,8 @@ export default function MergeSubtitles({ projectId, files, onCancel, onDone }: P
     const fd = buildForm()
     if (!fd) return
     if (outputName.trim()) fd.append('output_name', outputName.trim())
+    if (dropForced.size) fd.append('drop_forced', JSON.stringify(Array.from(dropForced)))
+    if (dropFull.size) fd.append('drop_full', JSON.stringify(Array.from(dropFull)))
     setBusy(true)
     setErr('')
     try {
@@ -133,11 +160,7 @@ export default function MergeSubtitles({ projectId, files, onCancel, onDone }: P
   const primaryLabel = busy
     ? 'Working…'
     : report
-      ? report.clean
-        ? 'Create merged subtitle'
-        : `Create anyway — combine ${report.overlap_count} overlap${
-            report.overlap_count === 1 ? '' : 's'
-          }`
+      ? 'Create merged subtitle'
       : 'Check overlap & create'
 
   return (
@@ -150,8 +173,9 @@ export default function MergeSubtitles({ projectId, files, onCancel, onDone }: P
 
         <div className="small muted" style={{ marginBottom: 12 }}>
           Stitch a “forced” track (foreign dialogue only) and a “standard”/full
-          track into one union subtitle. Overlapping cues are combined. The
-          result lands as a new SRT row — translate it from the file list.
+          track into one union subtitle. Where the two overlap, you choose per
+          clash which side(s) to keep. The result lands as a new SRT row —
+          translate it from the file list.
         </div>
 
         {err && <div className="error-msg">{err}</div>}
@@ -189,7 +213,15 @@ export default function MergeSubtitles({ projectId, files, onCancel, onDone }: P
           </div>
         </div>
 
-        {report && <ReportView report={report} />}
+        {report && (
+          <ReportView
+            report={report}
+            dropForced={dropForced}
+            dropFull={dropFull}
+            onToggleForced={toggleForced}
+            onToggleFull={toggleFull}
+          />
+        )}
 
         <div className="row between" style={{ marginTop: 14 }}>
           <button type="button" onClick={runPreview} disabled={busy}>
@@ -285,7 +317,19 @@ function Slot({
   )
 }
 
-function ReportView({ report }: { report: MergeReport }) {
+function ReportView({
+  report,
+  dropForced,
+  dropFull,
+  onToggleForced,
+  onToggleFull,
+}: {
+  report: MergeReport
+  dropForced: Set<number>
+  dropFull: Set<number>
+  onToggleForced: (idx: number) => void
+  onToggleFull: (idx: number) => void
+}) {
   return (
     <div style={{ marginTop: 12 }}>
       <div className="small muted">
@@ -300,13 +344,15 @@ function ReportView({ report }: { report: MergeReport }) {
       ) : (
         <div className="error-msg" style={{ marginTop: 6 }}>
           ⚠ The two files overlap in {report.overlap_count} place
-          {report.overlap_count === 1 ? '' : 's'}. Each overlap will be combined
-          into a single cue.
+          {report.overlap_count === 1 ? '' : 's'}. For each clash, tick the
+          side(s) to keep — both ticked are combined into one cue; one side kept
+          stays as-is; none drops the clash.
           {report.long_combined > 0 && (
             <>
               {' '}
-              {report.long_combined} of them span an unusually wide range — check
-              for an over-merge in the list below.
+              {report.long_combined} clash
+              {report.long_combined === 1 ? '' : 'es'} span an unusually wide
+              range — possible over-merge, check below.
             </>
           )}
         </div>
@@ -316,34 +362,99 @@ function ReportView({ report }: { report: MergeReport }) {
         <div
           style={{
             marginTop: 8,
-            maxHeight: 220,
+            maxHeight: 240,
             overflowY: 'auto',
             border: '1px solid var(--border, #ddd)',
             borderRadius: 6,
           }}
         >
-          {report.combined.map((c, i) => (
-            <div
-              key={i}
-              style={{ padding: '6px 8px', borderBottom: '1px solid var(--border, #eee)' }}
-            >
-              <div className="small muted">
-                {c.start} → {c.end}
-                {c.count > 2 ? ` · ${c.count} cues` : ''}
-                {c.long ? ' · wide' : ''}
+          {report.combined.map((c, i) => {
+            const forced = c.members.filter((m) => m.track === 'forced')
+            const full = c.members.filter((m) => m.track === 'full')
+            const keepForced = !dropForced.has(i)
+            const keepFull = !dropFull.has(i)
+            const survives =
+              (keepForced && forced.length > 0) || (keepFull && full.length > 0)
+            return (
+              <div
+                key={i}
+                style={{
+                  padding: '6px 8px',
+                  borderBottom: '1px solid var(--border, #eee)',
+                }}
+              >
+                <div className="small muted">
+                  Clash {i + 1}: {c.start} → {c.end}
+                  {c.long ? ' · wide' : ''}
+                </div>
+                {forced.length > 0 && (
+                  <ClashSide
+                    label="Forced"
+                    color="#b45309"
+                    texts={forced.map((m) => m.text)}
+                    checked={keepForced}
+                    onToggle={() => onToggleForced(i)}
+                  />
+                )}
+                {full.length > 0 && (
+                  <ClashSide
+                    label="Full"
+                    color="#1d4ed8"
+                    texts={full.map((m) => m.text)}
+                    checked={keepFull}
+                    onToggle={() => onToggleFull(i)}
+                  />
+                )}
+                {!survives && (
+                  <div className="small" style={{ color: 'var(--error)' }}>
+                    This clash will be dropped entirely.
+                  </div>
+                )}
               </div>
-              <div className="small" style={{ whiteSpace: 'pre-wrap' }}>
-                {c.texts.join('\n')}
-              </div>
-            </div>
-          ))}
+            )
+          })}
           {report.truncated > 0 && (
             <div className="small muted" style={{ padding: '6px 8px' }}>
-              + {report.truncated} more overlap{report.truncated === 1 ? '' : 's'} not shown
+              + {report.truncated} more clash{report.truncated === 1 ? '' : 'es'} not
+              shown (kept as-is / combined)
             </div>
           )}
         </div>
       )}
     </div>
+  )
+}
+
+function ClashSide({
+  label,
+  color,
+  texts,
+  checked,
+  onToggle,
+}: {
+  label: string
+  color: string
+  texts: string[]
+  checked: boolean
+  onToggle: () => void
+}) {
+  return (
+    <label
+      className="row"
+      style={{ gap: 6, alignItems: 'flex-start', marginTop: 4, opacity: checked ? 1 : 0.5 }}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={onToggle}
+        style={{ width: 'auto', marginTop: 3 }}
+      />
+      <span className="small" style={{ whiteSpace: 'pre-wrap' }}>
+        <b style={{ color }}>{label}</b>{' '}
+        <span style={{ textDecoration: checked ? 'none' : 'line-through' }}>
+          {texts.join('\n')}
+        </span>
+      </span>
+    </label>
   )
 }

@@ -15,8 +15,9 @@ Ollama LLM backend. No login, intended for internal LAN use only.
   Extracted tracks land in the project and can then be translated on demand.
 - **Merge two subtitles** into one union (e.g. a "forced" foreign-dialogue
   track + the "standard"/full track). Each input is an existing project file or
-  a fresh upload; an overlap report is shown first, overlapping cues are
-  combined, and the result lands as a normal SRT row ready to translate.
+  a fresh upload; an overlap report is shown first and, for each clash, you tick
+  which side(s) to keep (Forced / Full / both / neither). The result lands as a
+  normal SRT row ready to translate.
 - **MKVToolNix GUI** (jlesage/mkvtoolnix) runs as a sidecar on port 5800 for
   interactive edits when the in-app picker isn't enough. Linked from the
   drawer's "Tools" section.
@@ -122,17 +123,21 @@ npm run dev
   single union SRT *before* translation. Each of the two slots is either an
   existing project file (`srt`/`vtt`, extracted or uploaded) or a fresh upload.
   - **Overlap is surfaced, never silent.** A **Check overlap** step reports
-    cue counts and any time collisions; the commit always previews first, so a
-    colliding pair shows an unmissable warning and the button becomes
-    *"Create anyway — combine N overlap(s)"*. Overlapping cues are combined
-    into one cue spanning both ranges (exact-duplicate lines de-duplicated for
-    the "the full track already contains the forced line" case); unusually wide
+    cue counts and lists every time collision ("clash") with both sides clearly
+    labelled. For each clash you tick which side(s) to keep — **Forced**,
+    **Full**, both (combined into one cue, exact-duplicate lines de-duplicated),
+    or neither (clash dropped). The default keeps everything. Unusually wide
     fuses are flagged as possible over-merges.
   - The merged row lands at `status="extracted"` with
     `source_format="merged"` and is translated via the existing **Translate**
     button — no new pipeline state, **no DB migration**, no new dependency.
   - Backend: pure-stdlib `api/app/subtitles/merge.py` +
-    `POST /api/projects/{id}/merge/preview` and `POST /api/projects/{id}/merge`.
+    `POST /api/projects/{id}/merge/preview` and `POST /api/projects/{id}/merge`
+    (the latter takes `drop_forced` / `drop_full` clash-index lists).
+- **Source-track tag** — rows extracted from a video are tagged in the file
+  list with the source subtitle track's name (the title shown in the track
+  picker), or `stream N` when the track has no title. Additive
+  `source_track_name` column.
 - **Edit a project's name** — inline pencil editor in the project header
   (reuses the file-rename UI pattern). Blank names are rejected by the
   `PATCH /projects/{id}` guard.
