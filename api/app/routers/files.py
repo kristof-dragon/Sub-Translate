@@ -87,6 +87,9 @@ def _serialize(f: models.File) -> dict:
         # "pgs" for files that went through OCR, "" for files that arrived
         # as text. Lets the UI label OCR-origin rows.
         "source_format": f.source_format or "",
+        # Track title (or "stream N") of the source subtitle stream for
+        # extracted rows; "" for uploads/merged. Rendered as a tag in the list.
+        "source_track_name": f.source_track_name or "",
         # Independent progress counter for the OCR phase (0–100). Distinct
         # from `progress_pct` (translation progress) so both phases can
         # render without overwriting each other.

@@ -874,6 +874,15 @@ function FileRow({
           ) : (
             <div className="file-row-name-line">
               <span>{displayName}</span>
+              {f.source_track_name && (
+                <span
+                  className="badge"
+                  title="Source subtitle track this row was extracted from"
+                  style={{ fontWeight: 400 }}
+                >
+                  🎞 {f.source_track_name}
+                </span>
+              )}
               {f.source_format === 'merged' && (
                 <span className="small muted" title="Created by merging two subtitles">
                   · merged

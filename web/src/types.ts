@@ -45,6 +45,9 @@ export interface SubtitleFile {
   // "pgs" if the file went through bitmap OCR, "" for native text subtitles.
   // Lets the UI label OCR-origin rows and decide whether retry-OCR applies.
   source_format: string
+  // Track title (or "stream N") of the source subtitle stream for rows that
+  // were extracted from a video; "" for uploads and merged rows. Shown as a tag.
+  source_track_name: string
   // Independent 0–100 counter for the OCR phase. Distinct from progress_pct
   // (translation) so both phases render without overwriting each other.
   ocr_progress_pct: number

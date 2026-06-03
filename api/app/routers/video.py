@@ -59,6 +59,7 @@ def _serialize_file(f: models.File) -> dict:
         "translated_filename": "",
         "source_video_path": f.source_video_path or "",
         "source_format": f.source_format or "",
+        "source_track_name": f.source_track_name or "",
         "ocr_progress_pct": f.ocr_progress_pct or 0,
     }
 
@@ -151,6 +152,10 @@ async def extract_to_project(
             # extraction worker knows to enqueue OCR rather than landing
             # the row at "extracted". Empty string for text codecs.
             source_format=video.source_format_for(track.codec),
+            # Track title shown in the picker ("Forced", "English SDH", …) so
+            # the file list can tag which stream this row came from; fall back
+            # to the stream index when the track has no title.
+            source_track_name=track.name or f"stream {tid}",
         )
         db.add(row)
         db.commit()

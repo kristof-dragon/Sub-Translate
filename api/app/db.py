@@ -50,6 +50,7 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("source_video_path", "TEXT NOT NULL DEFAULT ''"),
         ("source_format", "TEXT NOT NULL DEFAULT ''"),
         ("ocr_progress_pct", "INTEGER NOT NULL DEFAULT 0"),
+        ("source_track_name", "TEXT NOT NULL DEFAULT ''"),
     ],
 }
 

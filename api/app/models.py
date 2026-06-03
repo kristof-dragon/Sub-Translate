@@ -98,6 +98,12 @@ class File(Base):
     # `format` column flips to "srt" but `source_format` records where the
     # SRT came from.
     source_format = Column(String, default="", nullable=False)
+    # Human label of the source subtitle track for extracted rows — the track
+    # title shown in the extraction picker ("Forced", "English SDH", …), or
+    # "stream N" when the track has no title. Empty for uploads and merged rows.
+    # Surfaced as a tag in the file list so the operator can see which stream a
+    # row came from.
+    source_track_name = Column(String, default="", nullable=False)
     # Per-stage progress counter for the OCR phase. Distinct from
     # `progress_pct` (which tracks translation) so both phases can show
     # independent progress in the UI without one overwriting the other.
