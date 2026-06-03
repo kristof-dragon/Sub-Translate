@@ -112,11 +112,11 @@ npm run dev
 
 ### v1.6.0
 
-> ⚠️ **Verification status:** the merge core is covered by unit tests
-> (`api/tests/test_merge.py`) and the API + web both build, but the
-> end-to-end `/merge` → translate path has not yet been smoke-tested in
-> Docker against a real forced + full subtitle pair. Treat as "ready to
-> try" until that lands, consistent with the v1.4/v1.5 caveats.
+> ✅ **Verification status:** smoke-tested 2026-06-03 on the operator's
+> production Docker stack — a real "forced" + "full" pair was merged,
+> exported, and translated end-to-end cleanly. Backed by unit tests
+> (`api/tests/test_merge.py`) plus a TestClient end-to-end pass over the
+> merge + export endpoints (per-clash keep/drop, source/translated export).
 
 - **Merge subtitles** — a new **Merge subtitles…** overlay stitches a
   "forced" (foreign-dialogue-only) track and a "standard"/full track into a
